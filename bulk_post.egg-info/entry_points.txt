@@ -1,0 +1,2 @@
+[console_scripts]
+bulk-post = bulk_post:main

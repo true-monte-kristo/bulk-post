@@ -1,0 +1,8 @@
+bulk_post.py
+pyproject.toml
+bulk_post.egg-info/PKG-INFO
+bulk_post.egg-info/SOURCES.txt
+bulk_post.egg-info/dependency_links.txt
+bulk_post.egg-info/entry_points.txt
+bulk_post.egg-info/top_level.txt
+tests/test_bulk_post.py
