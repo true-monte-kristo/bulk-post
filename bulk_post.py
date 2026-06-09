@@ -23,26 +23,30 @@ Failed rows are logged and skipped; execution always continues.
 """
 
 import argparse
+import contextlib
 import csv
 import os
 import pathlib
 import queue
 import re
-import select
 import signal
 import sys
 import threading
 import time
 import urllib.request
 import urllib.error
-from typing import Optional, Tuple
+from typing import Any, IO, Callable, Optional, Tuple, cast
 
 try:
     import termios
     import tty
+    import select as _select_mod
     _HAS_TERMIOS = True
+    _HAS_SELECT = hasattr(_select_mod, 'select')
 except ImportError:
     _HAS_TERMIOS = False
+    _HAS_SELECT = False
+    _select_mod = None  # type: ignore[assignment]
 
 BAR_WIDTH = 40
 PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
@@ -70,6 +74,11 @@ def _get_suggestion(buf: str) -> str:
     return ""
 
 
+def _render_bar(current: int, total: int) -> str:
+    filled = int(BAR_WIDTH * current / total)
+    return "=" * filled + (">" if filled < BAR_WIDTH else "=") + " " * max(0, BAR_WIDTH - filled - 1)
+
+
 class _BottomBar:
     """
     Reserves the bottom 2 terminal rows:
@@ -88,7 +97,8 @@ class _BottomBar:
         self._thread: Optional[threading.Thread] = None
         self._old_settings = None
         self._paused = threading.Event()
-        self._paused.set()  # set = not paused → input thread reads normally
+        self._paused.set()          # set = not paused → input thread reads normally
+        self._paused_ack = threading.Event()  # set by input thread when raw mode exited
 
     # ------------------------------------------------------------------ public
 
@@ -124,13 +134,10 @@ class _BottomBar:
 
     def pause(self) -> None:
         """Suspend raw mode so the main thread can call input()."""
+        self._paused_ack.clear()
         self._paused.clear()
-        time.sleep(0.05)  # let the input thread finish its current select
-        if self._old_settings is not None:
-            try:
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings)
-            except termios.error:
-                pass
+        # Wait for the input thread to acknowledge it has left raw mode.
+        self._paused_ack.wait(timeout=0.5)
         # Place cursor at the bottom of the scroll region for interactive prompts
         sys.stdout.write(f"\033[{self._h - 2};1H\n\r")
         sys.stdout.flush()
@@ -143,6 +150,15 @@ class _BottomBar:
             pass
         self._paused.set()
         self._redraw_cmd()
+
+    @contextlib.contextmanager
+    def suspended(self):
+        """Context manager that pauses raw mode for the duration of a block."""
+        self.pause()
+        try:
+            yield
+        finally:
+            self.resume()
 
     def write_line(self, text: str) -> None:
         with self._lock:
@@ -157,8 +173,7 @@ class _BottomBar:
     def update_progress(self, current: int, total: int) -> None:
         if total == 0:
             return
-        filled = int(BAR_WIDTH * current / total)
-        bar = "=" * filled + (">" if filled < BAR_WIDTH else "=") + " " * max(0, BAR_WIDTH - filled - 1)
+        bar = _render_bar(current, total)
         line = f"{_CYAN}  [{bar}] {int(100 * current / total):3}%  {current}/{total}{_RESET}"
         with self._lock:
             buf = self._buf
@@ -183,9 +198,21 @@ class _BottomBar:
             return
         try:
             while self._active:
-                if not self._paused.wait(timeout=0.1):
+                if not self._paused.is_set():
+                    # Exit raw mode, signal the main thread, then wait to resume.
+                    if self._old_settings is not None:
+                        try:
+                            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings)
+                        except termios.error:
+                            pass
+                    self._paused_ack.set()
+                    self._paused.wait()
+                    try:
+                        tty.setraw(sys.stdin.fileno())
+                    except termios.error:
+                        pass
                     continue
-                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                r, _, _ = _select_mod.select([sys.stdin], [], [], 0.05)  # type: ignore[union-attr]
                 if not r:
                     continue
                 ch = sys.stdin.read(1)
@@ -238,7 +265,7 @@ class _BottomBar:
 def count_csv_rows(path: str) -> int:
     try:
         with open(path, newline="", encoding="utf-8") as f:
-            return max(0, sum(1 for _ in f) - 1)
+            return sum(1 for _ in csv.DictReader(f))
     except OSError:
         return 0
 
@@ -246,8 +273,7 @@ def count_csv_rows(path: str) -> int:
 def print_progress(current: int, total: int) -> None:
     if total == 0:
         return
-    filled = int(BAR_WIDTH * current / total)
-    bar = "=" * filled + (">" if filled < BAR_WIDTH else "=") + " " * max(0, BAR_WIDTH - filled - 1)
+    bar = _render_bar(current, total)
     pct = int(100 * current / total)
     print(f"\r  [{bar}] {pct:3}%  {current}/{total}", end="", flush=True)
 
@@ -266,36 +292,43 @@ def _progress(bar: Optional[_BottomBar], current: int, total: int) -> None:
         print_progress(current, total)
 
 
-def resolve_token(flag_value: Optional[str], bar: Optional[_BottomBar] = None) -> str:
+def resolve_token(
+    flag_value: Optional[str],
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
+) -> str:
     if flag_value:
         return flag_value
     env = os.environ.get("BULK_TOKEN", "").strip()
     if env:
         return env
-    if bar:
-        bar.pause()
+    if suspend:
+        suspend()
     try:
         token = input("Paste your Bearer token: ").strip()
     except EOFError:
         token = ""
-    if bar:
-        bar.resume()
+    if resume:
+        resume()
     if not token:
         print("[ERROR] No token provided.", file=sys.stderr)
         sys.exit(1)
     return token
 
 
-def prompt_new_token(bar: Optional[_BottomBar] = None) -> str:
-    if bar:
-        bar.pause()
+def prompt_new_token(
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
+) -> str:
+    if suspend:
+        suspend()
     print("\n[AUTH]  Token expired (401). Grab a fresh token from browser DevTools.")
     try:
         token = input("Paste new Bearer token: ").strip()
     except EOFError:
         token = ""
-    if bar:
-        bar.resume()
+    if resume:
+        resume()
     if not token:
         print("[ERROR] No token provided — aborting.", file=sys.stderr)
         sys.exit(1)
@@ -340,8 +373,10 @@ def print_verbose(bar: Optional[_BottomBar], method: str, url: str, req_body: Op
 
 
 def _stdin_command() -> Optional[str]:
-    """Return a stripped line from stdin if one is ready, else None."""
-    if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
+    """Return a stripped line from stdin if one is ready, else None. Unix only."""
+    if not _HAS_SELECT:
+        return None
+    if sys.stdin.isatty() and _select_mod.select([sys.stdin], [], [], 0)[0]:
         try:
             return sys.stdin.readline().strip()
         except (OSError, EOFError):
@@ -357,6 +392,78 @@ def _wait_for_resume() -> None:
         if cmd == "/resume":
             print("[RESUMED]", flush=True)
             return
+
+
+# ---------------------------------------------------------------------------
+# _run helpers
+# ---------------------------------------------------------------------------
+
+def _open_retry_writer(retry_path: pathlib.Path, fieldnames: list) -> Tuple[IO[str], Any]:
+    """Open the retry CSV and write its header. Returns (file, writer)."""
+    f = open(retry_path, "w", newline="", encoding="utf-8")
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    return f, writer
+
+
+def _fire(
+    row: dict,
+    args,
+    token: str,
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+) -> Tuple[Optional[int], str, float, str, Optional[str]]:
+    """
+    Substitute placeholders, fire the request (with one 401 retry), return
+    (status, response_body, elapsed, final_url, new_token_or_None).
+    Returns (None, err_message, 0, "", None) on substitution error.
+    """
+    url, err = substitute(args.url, row)
+    if err:
+        return None, err, 0.0, "", None
+
+    req_body: Optional[str] = None
+    if args.body:
+        req_body, err = substitute(cast(str, args.body), row)
+        if err:
+            return None, err, 0.0, url, None
+
+    status, body, elapsed = http_request(url, token, args.method, req_body, args.timeout)
+
+    new_token: Optional[str] = None
+    if status == 401:
+        refreshed = prompt_new_token(suspend=suspend, resume=resume)
+        status, body, elapsed = http_request(url, refreshed, args.method, req_body, args.timeout)
+        new_token = refreshed
+
+    return status, body, elapsed, url, new_token
+
+
+def _log_row(
+    bar: Optional[_BottomBar],
+    args,
+    line_num: int,
+    status: Optional[int],
+    body: str,
+    elapsed: float,
+    url: str,
+    req_body: Optional[str],
+) -> bool:
+    """Print per-row output. Returns True if the row succeeded."""
+    method = args.method
+    if args.verbose:
+        print_verbose(bar, method, url, req_body, status, body, elapsed)
+
+    if status is not None and 200 <= status < 300:
+        elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
+        _out(bar, f"{_GREEN}[OK]    row {line_num}: {status} {url}{elapsed_str}{_RESET}")
+        return True
+    else:
+        short_body = body[:200].replace("\n", " ")
+        status_str = str(status) if status is not None else "ERR"
+        elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
+        _out(bar, f"{_RED}[FAIL]  row {line_num}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -385,23 +492,20 @@ def _run() -> None:
     parser.add_argument("--retry-file", "-r", default=None, dest="retry_file",
                         help="Path for failed-rows CSV (default: <input_stem>_failed.csv)")
     args = parser.parse_args()
+    args.method = args.method.upper()
 
-    token = resolve_token(args.token)
-    method = args.method.upper()
-    placeholders = PLACEHOLDER_RE.findall(args.url)
     total_rows = count_csv_rows(args.csv_path)
     offset = args.offset
 
-    csv_stem = pathlib.Path(args.csv_path).stem
-    csv_dir = pathlib.Path(args.csv_path).parent
-    retry_path = args.retry_file if args.retry_file else str(csv_dir / f"{csv_stem}_failed.csv")
+    csv_path = pathlib.Path(args.csv_path)
+    retry_path = pathlib.Path(args.retry_file) if args.retry_file else csv_path.parent / f"{csv_path.stem}_failed.csv"
 
     if offset >= total_rows and total_rows > 0:
         print(f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).", file=sys.stderr)
         sys.exit(1)
 
     try:
-        csv_file = open(args.csv_path, newline="", encoding="utf-8")
+        csv_file = open(csv_path, newline="", encoding="utf-8")
     except OSError as e:
         print(f"[ERROR] Cannot open CSV file: {e}", file=sys.stderr)
         sys.exit(1)
@@ -412,11 +516,15 @@ def _run() -> None:
         if b.start():
             bar = b
 
+    suspend = bar.pause if bar else None
+    resume = bar.resume if bar else None
+    token = resolve_token(args.token, suspend=suspend, resume=resume)
+
     try:
         with csv_file:
             reader = csv.DictReader(csv_file)
 
-            all_placeholders = placeholders + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
+            all_placeholders = PLACEHOLDER_RE.findall(args.url) + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
             if all_placeholders:
                 missing_headers = [p for p in all_placeholders if p not in (reader.fieldnames or [])]
                 if missing_headers:
@@ -430,48 +538,36 @@ def _run() -> None:
 
             remaining = total_rows - offset
             processed = ok = failed = 0
-            fieldnames = reader.fieldnames or []
-            retry_file = open(retry_path, "w", newline="", encoding="utf-8")
-            retry_writer = csv.DictWriter(retry_file, fieldnames=fieldnames)
-            retry_writer.writeheader()
+            fieldnames: list = list(reader.fieldnames or [])
+            retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
 
             try:
-                for line_num, row in enumerate(reader, start=offset + 2):  # line 1 is header, +offset skipped
+                for line_num, row in enumerate(reader, start=offset + 2):  # line 1 is header
                     processed += 1
                     absolute = offset + processed
-                    url, err = substitute(args.url, row)
-                    if not err and args.body:
-                        req_body, err = substitute(args.body, row)
-                    else:
-                        req_body = args.body
 
-                    if err:
+                    status, body, elapsed, url, new_token = _fire(row, args, token, suspend, resume)
+                    if new_token:
+                        token = new_token
+
+                    if status is None and not url:
+                        # substitution error — body holds the error message
                         failed += 1
                         retry_writer.writerow(row)
-                        _out(bar, f"{_RED}[SKIP]  row {line_num}: {err} | row={dict(row)}{_RESET}")
+                        _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
                         _progress(bar, absolute, total_rows)
                         continue
 
-                    status, body, elapsed = http_request(url, token, method, req_body, args.timeout)
+                    req_body = None  # reconstructed for verbose display only
+                    if args.body:
+                        req_body, _ = substitute(args.body, row)
 
-                    if status == 401:
-                        token = prompt_new_token(bar)
-                        status, body, elapsed = http_request(url, token, method, req_body, args.timeout)
-
-                    if args.verbose:
-                        print_verbose(bar, method, url, req_body, status, body, elapsed)
-
-                    if status is not None and 200 <= status < 300:
+                    succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body)
+                    if succeeded:
                         ok += 1
-                        elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-                        _out(bar, f"{_GREEN}[OK]    row {line_num}: {status} {url}{elapsed_str}{_RESET}")
                     else:
                         failed += 1
                         retry_writer.writerow(row)
-                        short_body = body[:200].replace("\n", " ")
-                        status_str = str(status) if status is not None else "ERR"
-                        elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-                        _out(bar, f"{_RED}[FAIL]  row {line_num}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
 
                     _progress(bar, absolute, total_rows)
 
@@ -504,7 +600,7 @@ def _run() -> None:
         print(f"Failed rows saved to: {retry_path}")
         sys.exit(1)
     else:
-        pathlib.Path(retry_path).unlink(missing_ok=True)
+        retry_path.unlink(missing_ok=True)
         print(f"\nDone — {remaining} rows processed: {ok} succeeded, 0 failed.")
 
 
