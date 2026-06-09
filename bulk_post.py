@@ -61,7 +61,10 @@ _GREY       = "\033[90m"        # bright-black / dark-grey
 _TERRACOTTA = "\033[38;5;166m"  # reddish-orange
 _GHOST      = "\033[2;37m"      # dim white — ghost / suggestion text
 
-_COMMANDS = ["/pause", "/resume", "/exit"]
+_CMD_PAUSE  = "/pause"
+_CMD_RESUME = "/resume"
+_CMD_EXIT   = "/exit"
+_COMMANDS   = [_CMD_PAUSE, _CMD_RESUME, _CMD_EXIT]
 
 
 def _get_suggestion(buf: str) -> str:
@@ -191,6 +194,44 @@ class _BottomBar:
 
     # ------------------------------------------------------------------ private
 
+    def _handle_pause_state(self) -> None:
+        """Exit raw mode, signal the main thread, wait to resume, re-enter raw mode."""
+        if self._old_settings is not None:
+            try:
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings)
+            except termios.error:
+                pass
+        self._paused_ack.set()
+        self._paused.wait()
+        try:
+            tty.setraw(sys.stdin.fileno())
+        except termios.error:
+            pass
+
+    def _handle_char(self, ch: str) -> None:
+        if ch in ("\r", "\n"):
+            with self._lock:
+                cmd, self._buf = self._buf, ""
+            self._redraw_cmd()
+            if cmd:
+                self._q.put(cmd)
+        elif ch == "\x03":  # Ctrl+C → raise SIGINT on main thread
+            os.kill(os.getpid(), signal.SIGINT)
+        elif ch == "\t":  # Tab → accept autocomplete suggestion
+            with self._lock:
+                suggestion = _get_suggestion(self._buf)
+                if suggestion:
+                    self._buf += suggestion
+            self._redraw_cmd()
+        elif ch in ("\x7f", "\x08"):  # backspace
+            with self._lock:
+                self._buf = self._buf[:-1]
+            self._redraw_cmd()
+        elif ch.isprintable():
+            with self._lock:
+                self._buf += ch
+            self._redraw_cmd()
+
     def _input_loop(self) -> None:
         try:
             tty.setraw(sys.stdin.fileno())
@@ -199,18 +240,7 @@ class _BottomBar:
         try:
             while self._active:
                 if not self._paused.is_set():
-                    # Exit raw mode, signal the main thread, then wait to resume.
-                    if self._old_settings is not None:
-                        try:
-                            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings)
-                        except termios.error:
-                            pass
-                    self._paused_ack.set()
-                    self._paused.wait()
-                    try:
-                        tty.setraw(sys.stdin.fileno())
-                    except termios.error:
-                        pass
+                    self._handle_pause_state()
                     continue
                 r, _, _ = _select_mod.select([sys.stdin], [], [], 0.05)  # type: ignore[union-attr]
                 if not r:
@@ -218,28 +248,7 @@ class _BottomBar:
                 ch = sys.stdin.read(1)
                 if not ch:
                     continue
-                if ch in ("\r", "\n"):
-                    with self._lock:
-                        cmd, self._buf = self._buf, ""
-                    self._redraw_cmd()
-                    if cmd:
-                        self._q.put(cmd)
-                elif ch == "\x03":  # Ctrl+C → raise SIGINT on main thread
-                    os.kill(os.getpid(), signal.SIGINT)
-                elif ch == "\t":  # Tab → accept autocomplete suggestion
-                    with self._lock:
-                        suggestion = _get_suggestion(self._buf)
-                        if suggestion:
-                            self._buf += suggestion
-                    self._redraw_cmd()
-                elif ch in ("\x7f", "\x08"):  # backspace
-                    with self._lock:
-                        self._buf = self._buf[:-1]
-                    self._redraw_cmd()
-                elif ch.isprintable():
-                    with self._lock:
-                        self._buf += ch
-                    self._redraw_cmd()
+                self._handle_char(ch)
         except Exception:
             pass
 
@@ -389,7 +398,7 @@ def _wait_for_resume() -> None:
     while True:
         time.sleep(0.2)
         cmd = _stdin_command()
-        if cmd == "/resume":
+        if cmd == _CMD_RESUME:
             print("[RESUMED]", flush=True)
             return
 
@@ -466,6 +475,93 @@ def _log_row(
         return False
 
 
+def _validate_placeholders(args: argparse.Namespace, fieldnames: Optional[list]) -> None:
+    all_placeholders = PLACEHOLDER_RE.findall(args.url) + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
+    if not all_placeholders:
+        return
+    missing = [p for p in all_placeholders if p not in (fieldnames or [])]
+    if missing:
+        print(f"[ERROR] CSV is missing columns required by placeholders: {missing}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _skip_rows(reader: csv.DictReader, count: int, bar: Optional[_BottomBar]) -> None:
+    if count:
+        _out(bar, f"Skipping {count} rows, starting from row {count + 1}.")
+        for _ in range(count):
+            next(reader, None)
+
+
+def _handle_cmd_in_loop(
+    cmd: Optional[str],
+    bar: Optional[_BottomBar],
+    line_num: int,
+    ok: int,
+    failed: int,
+) -> bool:
+    """Return True if the row loop should stop."""
+    if cmd == _CMD_EXIT:
+        _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+        return True
+    if cmd == _CMD_PAUSE:
+        if bar:
+            bar.write_line("[PAUSED]  Type /resume to continue...")
+            while True:
+                time.sleep(0.1)
+                if bar.poll() == _CMD_RESUME:
+                    bar.write_line("[RESUMED]")
+                    break
+        else:
+            _wait_for_resume()
+    return False
+
+
+def _poll_cmd(bar: Optional[_BottomBar]) -> Optional[str]:
+    return bar.poll() if bar else _stdin_command()
+
+
+def _run_loop(
+    reader: csv.DictReader,
+    args: argparse.Namespace,
+    token: str,
+    bar: Optional[_BottomBar],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    retry_writer: Any,
+    offset: int,
+    total_rows: int,
+) -> Tuple[int, int]:
+    remaining = total_rows - offset
+    processed = ok = failed = 0
+    for line_num, row in enumerate(reader, start=offset + 2):
+        processed += 1
+        absolute = offset + processed
+        status, body, elapsed, url, new_token = _fire(row, args, token, suspend, resume)
+        if new_token:
+            token = new_token
+        if status is None and not url:
+            failed += 1
+            retry_writer.writerow(row)
+            _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
+            _progress(bar, absolute, total_rows)
+            continue
+        req_body = None
+        if args.body:
+            req_body, _ = substitute(args.body, row)
+        succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body)
+        ok += int(succeeded)
+        if not succeeded:
+            failed += 1
+            retry_writer.writerow(row)
+        _progress(bar, absolute, total_rows)
+        cmd = _poll_cmd(bar)
+        if _handle_cmd_in_loop(cmd, bar, line_num, ok, failed):
+            break
+        if args.delay > 0 and processed < remaining:
+            time.sleep(args.delay / 1000)
+    return ok, failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -500,7 +596,7 @@ def _run() -> None:
     csv_path = pathlib.Path(args.csv_path)
     retry_path = pathlib.Path(args.retry_file) if args.retry_file else csv_path.parent / f"{csv_path.stem}_failed.csv"
 
-    if offset >= total_rows and total_rows > 0:
+    if offset >= total_rows > 0:
         print(f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).", file=sys.stderr)
         sys.exit(1)
 
@@ -523,72 +619,12 @@ def _run() -> None:
     try:
         with csv_file:
             reader = csv.DictReader(csv_file)
-
-            all_placeholders = PLACEHOLDER_RE.findall(args.url) + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
-            if all_placeholders:
-                missing_headers = [p for p in all_placeholders if p not in (reader.fieldnames or [])]
-                if missing_headers:
-                    print(f"[ERROR] CSV is missing columns required by placeholders: {missing_headers}", file=sys.stderr)
-                    sys.exit(1)
-
-            if offset:
-                _out(bar, f"Skipping {offset} rows, starting from row {offset + 1}.")
-                for _ in range(offset):
-                    next(reader, None)
-
-            remaining = total_rows - offset
-            processed = ok = failed = 0
             fieldnames: list = list(reader.fieldnames or [])
+            _validate_placeholders(args, fieldnames)
+            _skip_rows(reader, offset, bar)
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
-
             try:
-                for line_num, row in enumerate(reader, start=offset + 2):  # line 1 is header
-                    processed += 1
-                    absolute = offset + processed
-
-                    status, body, elapsed, url, new_token = _fire(row, args, token, suspend, resume)
-                    if new_token:
-                        token = new_token
-
-                    if status is None and not url:
-                        # substitution error — body holds the error message
-                        failed += 1
-                        retry_writer.writerow(row)
-                        _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
-                        _progress(bar, absolute, total_rows)
-                        continue
-
-                    req_body = None  # reconstructed for verbose display only
-                    if args.body:
-                        req_body, _ = substitute(args.body, row)
-
-                    succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body)
-                    if succeeded:
-                        ok += 1
-                    else:
-                        failed += 1
-                        retry_writer.writerow(row)
-
-                    _progress(bar, absolute, total_rows)
-
-                    cmd = bar.poll() if bar else _stdin_command()
-                    if cmd == "/exit":
-                        _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
-                        break
-                    elif cmd == "/pause":
-                        if bar:
-                            bar.write_line("[PAUSED]  Type /resume to continue...")
-                            while True:
-                                time.sleep(0.1)
-                                resume_cmd = bar.poll()
-                                if resume_cmd == "/resume":
-                                    bar.write_line("[RESUMED]")
-                                    break
-                        else:
-                            _wait_for_resume()
-
-                    if args.delay > 0 and processed < remaining:
-                        time.sleep(args.delay / 1000)
+                ok, failed = _run_loop(reader, args, token, bar, suspend, resume, retry_writer, offset, total_rows)
             finally:
                 retry_file.close()
     finally:
@@ -596,12 +632,12 @@ def _run() -> None:
             bar.stop()
 
     if failed:
-        print(f"\nDone — {remaining} rows processed: {ok} succeeded, {failed} failed.")
+        print(f"\nDone — {total_rows - offset} rows processed: {ok} succeeded, {failed} failed.")
         print(f"Failed rows saved to: {retry_path}")
         sys.exit(1)
     else:
         retry_path.unlink(missing_ok=True)
-        print(f"\nDone — {remaining} rows processed: {ok} succeeded, 0 failed.")
+        print(f"\nDone — {total_rows - offset} rows processed: {ok} succeeded, 0 failed.")
 
 
 if __name__ == "__main__":
