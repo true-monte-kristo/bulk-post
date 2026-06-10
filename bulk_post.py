@@ -25,6 +25,7 @@ Failed rows are logged and skipped; execution always continues.
 import argparse
 import contextlib
 import csv
+import datetime
 import os
 import pathlib
 import queue
@@ -95,6 +96,8 @@ class _BottomBar:
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._buf = ""
+        self._nav_idx: int = -1   # -1 = free input; 0..len(_COMMANDS)-1 = navigating
+        self._saved_buf: str = "" # buffer snapshot taken when entering navigation
         self._h = 0
         self._active = False
         self._thread: Optional[threading.Thread] = None
@@ -212,11 +215,14 @@ class _BottomBar:
         if ch in ("\r", "\n"):
             with self._lock:
                 cmd, self._buf = self._buf, ""
+                self._nav_idx = -1
             self._redraw_cmd()
             if cmd:
                 self._q.put(cmd)
         elif ch == "\x03":  # Ctrl+C → raise SIGINT on main thread
             os.kill(os.getpid(), signal.SIGINT)
+        elif ch == "\x1b":  # escape sequence (arrow keys, etc.)
+            self._handle_escape()
         elif ch == "\t":  # Tab → accept autocomplete suggestion
             with self._lock:
                 suggestion = _get_suggestion(self._buf)
@@ -225,12 +231,50 @@ class _BottomBar:
             self._redraw_cmd()
         elif ch in ("\x7f", "\x08"):  # backspace
             with self._lock:
+                self._nav_idx = -1
                 self._buf = self._buf[:-1]
             self._redraw_cmd()
         elif ch.isprintable():
             with self._lock:
+                self._nav_idx = -1
                 self._buf += ch
             self._redraw_cmd()
+
+    def _handle_escape(self) -> None:
+        # Arrow key sequences are ESC [ A/B (3 bytes). After _input_loop reads
+        # the ESC, the remaining bytes are in Python's internal buffer — read
+        # them directly rather than via select, which checks the OS fd buffer
+        # (already empty) and would give a false-negative.
+        bracket = sys.stdin.read(1)
+        if bracket != "[":
+            return
+        code = sys.stdin.read(1)
+        if code == "A":
+            self._nav_up()
+        elif code == "B":
+            self._nav_down()
+
+    def _nav_up(self) -> None:
+        with self._lock:
+            if self._nav_idx == -1:
+                self._saved_buf = self._buf
+                self._nav_idx = len(_COMMANDS) - 1
+            elif self._nav_idx > 0:
+                self._nav_idx -= 1
+            self._buf = _COMMANDS[self._nav_idx]
+        self._redraw_cmd()
+
+    def _nav_down(self) -> None:
+        with self._lock:
+            if self._nav_idx == -1:
+                return
+            if self._nav_idx < len(_COMMANDS) - 1:
+                self._nav_idx += 1
+                self._buf = _COMMANDS[self._nav_idx]
+            else:
+                self._nav_idx = -1
+                self._buf = self._saved_buf
+        self._redraw_cmd()
 
     def _input_loop(self) -> None:
         try:
@@ -415,6 +459,44 @@ def _open_retry_writer(retry_path: pathlib.Path, fieldnames: list) -> Tuple[IO[s
     return f, writer
 
 
+def _open_log_file(log_path: pathlib.Path) -> IO[str]:
+    f = open(log_path, "a", encoding="utf-8")
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    f.write(f"\n{'=' * 60}\nRun started {ts}\n{'=' * 60}\n")
+    f.flush()
+    return f
+
+
+def _write_failure_log(
+    log_file: IO[str],
+    kind: str,
+    line_num: int,
+    method: str,
+    url: str,
+    req_body: Optional[str],
+    status: Optional[int],
+    resp_body: str,
+    elapsed: float,
+) -> None:
+    ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    parts = [f"--- {kind}  row {line_num}  {ts} ---"]
+    if url:
+        parts.append(f"Method:   {method}")
+        parts.append(f"URL:      {url}")
+        if req_body:
+            parts.append(f"Body:     {req_body}")
+        status_str = str(status) if status is not None else "ERR"
+        parts.append(f"Status:   {status_str}")
+        parts.append(f"Elapsed:  {elapsed * 1000:.0f} ms")
+        if resp_body:
+            parts.append(f"Response: {resp_body.strip()[:1000]}")
+    else:
+        parts.append(f"Error:    {resp_body}")
+    parts.append("")
+    log_file.write("\n".join(parts) + "\n")
+    log_file.flush()
+
+
 def _fire(
     row: dict,
     args,
@@ -528,6 +610,7 @@ def _run_loop(
     suspend: Optional[Callable],
     resume: Optional[Callable],
     retry_writer: Any,
+    log_file: IO[str],
     offset: int,
     total_rows: int,
 ) -> Tuple[int, int]:
@@ -543,6 +626,7 @@ def _run_loop(
             failed += 1
             retry_writer.writerow(row)
             _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
+            _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, None, body, 0.0)
             _progress(bar, absolute, total_rows)
             continue
         req_body = None
@@ -553,6 +637,7 @@ def _run_loop(
         if not succeeded:
             failed += 1
             retry_writer.writerow(row)
+            _write_failure_log(log_file, "FAIL", line_num, args.method, url, req_body, status, body, elapsed)
         _progress(bar, absolute, total_rows)
         cmd = _poll_cmd(bar)
         if _handle_cmd_in_loop(cmd, bar, line_num, ok, failed):
@@ -595,6 +680,7 @@ def _run() -> None:
 
     csv_path = pathlib.Path(args.csv_path)
     retry_path = pathlib.Path(args.retry_file) if args.retry_file else csv_path.parent / f"{csv_path.stem}_failed.csv"
+    log_path = retry_path.with_suffix(".log")
 
     if offset >= total_rows > 0:
         print(f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).", file=sys.stderr)
@@ -623,10 +709,12 @@ def _run() -> None:
             _validate_placeholders(args, fieldnames)
             _skip_rows(reader, offset, bar)
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
+            log_file = _open_log_file(log_path)
             try:
-                ok, failed = _run_loop(reader, args, token, bar, suspend, resume, retry_writer, offset, total_rows)
+                ok, failed = _run_loop(reader, args, token, bar, suspend, resume, retry_writer, log_file, offset, total_rows)
             finally:
                 retry_file.close()
+                log_file.close()
     finally:
         if bar:
             bar.stop()
@@ -634,9 +722,11 @@ def _run() -> None:
     if failed:
         print(f"\nDone — {total_rows - offset} rows processed: {ok} succeeded, {failed} failed.")
         print(f"Failed rows saved to: {retry_path}")
+        print(f"Failure log:          {log_path}")
         sys.exit(1)
     else:
         retry_path.unlink(missing_ok=True)
+        log_path.unlink(missing_ok=True)
         print(f"\nDone — {total_rows - offset} rows processed: {ok} succeeded, 0 failed.")
 
 
