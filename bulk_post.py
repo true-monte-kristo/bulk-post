@@ -36,8 +36,8 @@ import signal
 import sys
 import threading
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 import xml.etree.ElementTree as _ET
 from typing import Any, IO, Callable, Optional, Tuple, cast
 
@@ -45,6 +45,7 @@ try:
     import termios
     import tty
     import select as _select_mod
+
     _HAS_TERMIOS = True
     _HAS_SELECT = hasattr(_select_mod, 'select')
 except ImportError:
@@ -57,18 +58,18 @@ PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 _CMD_PROMPT = "  cmd> "
 
 # ANSI colour helpers
-_RESET      = "\033[0m"
-_GREEN      = "\033[32m"
-_RED        = "\033[31m"
-_CYAN       = "\033[36m"
-_GREY       = "\033[90m"        # bright-black / dark-grey
+_RESET = "\033[0m"
+_GREEN = "\033[32m"
+_RED = "\033[31m"
+_CYAN = "\033[36m"
+_GREY = "\033[90m"  # bright-black / dark-grey
 _TERRACOTTA = "\033[38;5;166m"  # reddish-orange
-_GHOST      = "\033[2;37m"      # dim white — ghost / suggestion text
+_GHOST = "\033[2;37m"  # dim white — ghost / suggestion text
 
-_CMD_PAUSE  = "/pause"
+_CMD_PAUSE = "/pause"
 _CMD_RESUME = "/resume"
-_CMD_EXIT   = "/exit"
-_COMMANDS   = [_CMD_PAUSE, _CMD_RESUME, _CMD_EXIT]
+_CMD_EXIT = "/exit"
+_COMMANDS = [_CMD_PAUSE, _CMD_RESUME, _CMD_EXIT]
 
 
 def _get_suggestion(buf: str) -> str:
@@ -99,14 +100,14 @@ class _BottomBar:
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._buf = ""
-        self._nav_idx: int = -1   # -1 = free input; 0..len(_COMMANDS)-1 = navigating
-        self._saved_buf: str = "" # buffer snapshot taken when entering navigation
+        self._nav_idx: int = -1  # -1 = free input; 0..len(_COMMANDS)-1 = navigating
+        self._saved_buf: str = ""  # buffer snapshot taken when entering navigation
         self._h = 0
         self._active = False
         self._thread: Optional[threading.Thread] = None
         self._old_settings = None
         self._paused = threading.Event()
-        self._paused.set()          # set = not paused → input thread reads normally
+        self._paused.set()  # set = not paused → input thread reads normally
         self._paused_ack = threading.Event()  # set by input thread when raw mode exited
 
     # ------------------------------------------------------------------ public
@@ -349,9 +350,9 @@ def _progress(bar: Optional[_BottomBar], current: int, total: int) -> None:
 
 
 def resolve_token(
-    flag_value: Optional[str],
-    suspend: Optional[Callable] = None,
-    resume: Optional[Callable] = None,
+        flag_value: Optional[str],
+        suspend: Optional[Callable] = None,
+        resume: Optional[Callable] = None,
 ) -> str:
     if flag_value:
         return flag_value
@@ -373,8 +374,8 @@ def resolve_token(
 
 
 def prompt_new_token(
-    suspend: Optional[Callable] = None,
-    resume: Optional[Callable] = None,
+        suspend: Optional[Callable] = None,
+        resume: Optional[Callable] = None,
 ) -> str:
     if suspend:
         suspend()
@@ -392,9 +393,9 @@ def prompt_new_token(
 
 
 def resolve_basic_creds(
-    flag_value: Optional[str],
-    suspend: Optional[Callable] = None,
-    resume: Optional[Callable] = None,
+        flag_value: Optional[str],
+        suspend: Optional[Callable] = None,
+        resume: Optional[Callable] = None,
 ) -> str:
     if flag_value:
         return flag_value
@@ -416,8 +417,8 @@ def resolve_basic_creds(
 
 
 def prompt_new_basic_creds(
-    suspend: Optional[Callable] = None,
-    resume: Optional[Callable] = None,
+        suspend: Optional[Callable] = None,
+        resume: Optional[Callable] = None,
 ) -> str:
     if suspend:
         suspend()
@@ -435,9 +436,9 @@ def prompt_new_basic_creds(
 
 
 def resolve_auth_header(
-    args: argparse.Namespace,
-    suspend: Optional[Callable] = None,
-    resume: Optional[Callable] = None,
+        args: argparse.Namespace,
+        suspend: Optional[Callable] = None,
+        resume: Optional[Callable] = None,
 ) -> Optional[str]:
     if args.auth_type == "none":
         return None
@@ -455,7 +456,8 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
     return PLACEHOLDER_RE.sub(lambda m: row[m.group(1)], template), None
 
 
-def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30, content_type: str = "application/json") -> Tuple[Optional[int], str, float]:
+def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30,
+                 content_type: str = "application/json") -> Tuple[Optional[int], str, float]:
     """Returns (status_or_None, response_body, elapsed_seconds)."""
     encoded_body = body.encode("utf-8") if body else None
     headers: dict = {}
@@ -477,7 +479,8 @@ def http_request(url: str, auth_header: Optional[str], method: str, body: Option
         return None, f"Request timed out ({timeout}s)", time.monotonic() - t0
 
 
-def print_verbose(bar: Optional[_BottomBar], method: str, url: str, req_body: Optional[str], status: Optional[int], resp_body: str, elapsed: float) -> None:
+def print_verbose(bar: Optional[_BottomBar], method: str, url: str, req_body: Optional[str], status: Optional[int],
+                  resp_body: str, elapsed: float) -> None:
     _out(bar, f"  > {method} {url}")
     if req_body:
         _out(bar, f"  > body: {req_body}")
@@ -533,15 +536,15 @@ def _open_log_file(log_path: pathlib.Path) -> IO[str]:
 
 
 def _write_failure_log(
-    log_file: IO[str],
-    kind: str,
-    line_num: int,
-    method: str,
-    url: str,
-    req_body: Optional[str],
-    status: Optional[int],
-    resp_body: str,
-    elapsed: float,
+        log_file: IO[str],
+        kind: str,
+        line_num: int,
+        method: str,
+        url: str,
+        req_body: Optional[str],
+        status: Optional[int],
+        resp_body: str,
+        elapsed: float,
 ) -> None:
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     parts = [f"--- {kind}  row {line_num}  {ts} ---"]
@@ -579,26 +582,26 @@ def _validate_body_template(template: str, content_type: str) -> Optional[str]:
 
 
 def _fire(
-    row: dict,
-    args,
-    auth_header: Optional[str],
-    suspend: Optional[Callable],
-    resume: Optional[Callable],
-) -> Tuple[Optional[int], str, float, str, Optional[str]]:
+        row: dict,
+        args,
+        auth_header: Optional[str],
+        suspend: Optional[Callable],
+        resume: Optional[Callable],
+) -> Tuple[Optional[int], str, float, str, Optional[str], Optional[str]]:
     """
     Substitute placeholders, fire the request (with one 401 retry), return
-    (status, response_body, elapsed, final_url, new_auth_header_or_None).
-    Returns (None, err_message, 0, "", None) on substitution error.
+    (status, response_body, elapsed, final_url, new_auth_header_or_None, req_body).
+    Returns (None, err_message, 0, "", None, None) on substitution error.
     """
     url, err = substitute(args.url, row)
     if err:
-        return None, err, 0.0, "", None
+        return None, err, 0.0, "", None, None
 
     req_body: Optional[str] = None
     if args.body:
         req_body, err = substitute(cast(str, args.body), row)
         if err:
-            return None, err, 0.0, url, None
+            return None, err, 0.0, url, None, None
         ct = args.content_type
     else:
         ct = "application/json"
@@ -614,18 +617,18 @@ def _fire(
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
         status, body, elapsed = http_request(url, new_auth_header, args.method, req_body, args.timeout, ct)
 
-    return status, body, elapsed, url, new_auth_header
+    return status, body, elapsed, url, new_auth_header, req_body
 
 
 def _log_row(
-    bar: Optional[_BottomBar],
-    args,
-    line_num: int,
-    status: Optional[int],
-    body: str,
-    elapsed: float,
-    url: str,
-    req_body: Optional[str],
+        bar: Optional[_BottomBar],
+        args,
+        line_num: int,
+        status: Optional[int],
+        body: str,
+        elapsed: float,
+        url: str,
+        req_body: Optional[str],
 ) -> bool:
     """Print per-row output. Returns True if the row succeeded."""
     method = args.method
@@ -667,11 +670,11 @@ def _skip_rows(reader: csv.DictReader, count: int, bar: Optional[_BottomBar]) ->
 
 
 def _handle_cmd_in_loop(
-    cmd: Optional[str],
-    bar: Optional[_BottomBar],
-    line_num: int,
-    ok: int,
-    failed: int,
+        cmd: Optional[str],
+        bar: Optional[_BottomBar],
+        line_num: int,
+        ok: int,
+        failed: int,
 ) -> bool:
     """Return True if the row loop should stop."""
     if cmd == _CMD_EXIT:
@@ -687,7 +690,8 @@ def _handle_cmd_in_loop(
                     bar.write_line("[RESUMED]")
                     break
                 if paused_cmd == _CMD_EXIT:
-                    _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+                    _out(bar,
+                         f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
                     return True
         else:
             if _wait_for_resume():
@@ -701,23 +705,23 @@ def _poll_cmd(bar: Optional[_BottomBar]) -> Optional[str]:
 
 
 def _run_loop(
-    reader: csv.DictReader,
-    args: argparse.Namespace,
-    auth_header: Optional[str],
-    bar: Optional[_BottomBar],
-    suspend: Optional[Callable],
-    resume: Optional[Callable],
-    retry_writer: Any,
-    log_file: IO[str],
-    offset: int,
-    total_rows: int,
+        reader: csv.DictReader,
+        args: argparse.Namespace,
+        auth_header: Optional[str],
+        bar: Optional[_BottomBar],
+        suspend: Optional[Callable],
+        resume: Optional[Callable],
+        retry_writer: Any,
+        log_file: IO[str],
+        offset: int,
+        total_rows: int,
 ) -> Tuple[int, int]:
     remaining = total_rows - offset
     processed = ok = failed = 0
     for line_num, row in enumerate(reader, start=offset + 2):
         processed += 1
         absolute = offset + processed
-        status, body, elapsed, url, new_auth_header = _fire(row, args, auth_header, suspend, resume)
+        status, body, elapsed, url, new_auth_header, req_body = _fire(row, args, auth_header, suspend, resume)
         if new_auth_header:
             auth_header = new_auth_header
         if status is None and not url:
@@ -727,9 +731,6 @@ def _run_loop(
             _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, None, body, 0.0)
             _progress(bar, absolute, total_rows)
             continue
-        req_body = None
-        if args.body:
-            req_body, _ = substitute(args.body, row)
         succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body)
         ok += int(succeeded)
         if not succeeded:
@@ -762,13 +763,17 @@ def _run() -> None:
     parser.add_argument("--url", "-u", required=True, help="Target URL, may contain {{variable}} placeholders")
     parser.add_argument("--auth-type", "-a", default="none", choices=["bearer", "basic", "none"],
                         dest="auth_type", help="Auth method: bearer (default), basic, or none")
-    parser.add_argument("--token", "-t", default=None, help="Bearer token (overrides BULK_TOKEN env var); used with --auth-type bearer")
-    parser.add_argument("--user", "-U", default=None, help="Basic auth credentials as user:pass (overrides BULK_USER env var); used with --auth-type basic")
+    parser.add_argument("--token", "-t", default=None,
+                        help="Bearer token (overrides BULK_TOKEN env var); used with --auth-type bearer")
+    parser.add_argument("--user", "-U", default=None,
+                        help="Basic auth credentials as user:pass (overrides BULK_USER env var); used with --auth-type basic")
     parser.add_argument("--csv", "-c", required=True, dest="csv_path", help="Path to CSV file")
     parser.add_argument("--method", "-m", default="POST", help="HTTP method (default: POST)")
     parser.add_argument("--body", "-b", default=None, help="Request body (e.g. JSON string)")
-    parser.add_argument("--content-type", "-C", default="application/json", dest="content_type", help="Content-Type header (default: application/json)")
-    parser.add_argument("--delay", "-d", type=int, default=0, help="Delay in milliseconds between requests (default: 0)")
+    parser.add_argument("--content-type", "-C", default="application/json", dest="content_type",
+                        help="Content-Type header (default: application/json)")
+    parser.add_argument("--delay", "-d", type=int, default=0,
+                        help="Delay in milliseconds between requests (default: 0)")
     parser.add_argument("--offset", "-o", type=int, default=0, help="Skip first N data rows (default: 0)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print request/response details and timing")
     parser.add_argument("--timeout", "-T", type=int, default=30, help="Request timeout in seconds (default: 30)")
@@ -777,28 +782,28 @@ def _run() -> None:
     args = parser.parse_args()
     args.method = args.method.upper()
 
-    total_rows = count_csv_rows(args.csv_path)
     offset = args.offset
 
     csv_path = pathlib.Path(args.csv_path)
     retry_path = pathlib.Path(args.retry_file) if args.retry_file else csv_path.parent / f"{csv_path.stem}_failed.csv"
     log_path = retry_path.with_suffix(".log")
 
-    if offset >= total_rows > 0:
-        print(f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).", file=sys.stderr)
-        sys.exit(1)
-
+    # Single pass: read header and count rows before starting the bar or prompting
+    # for credentials, so validation errors are always visible in a clean terminal.
     try:
-        csv_file = open(csv_path, newline="", encoding="utf-8")
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            _r = csv.DictReader(f)
+            fieldnames: list = list(_r.fieldnames or [])
+            total_rows = sum(1 for _ in _r)
     except OSError as e:
         print(f"[ERROR] Cannot open CSV file: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Read only the header to validate placeholders/body before starting the bar
-    # or prompting for a token, so errors are always visible in a clean terminal.
-    with csv_file:
-        fieldnames: list = list(csv.DictReader(csv_file).fieldnames or [])
     _validate_placeholders(args, fieldnames)
+
+    if offset >= total_rows > 0:
+        print(f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).", file=sys.stderr)
+        sys.exit(1)
 
     try:
         csv_file = open(csv_path, newline="", encoding="utf-8")
@@ -823,7 +828,8 @@ def _run() -> None:
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
             log_file = _open_log_file(log_path)
             try:
-                ok, failed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset, total_rows)
+                ok, failed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset,
+                                       total_rows)
             finally:
                 retry_file.close()
                 log_file.close()
