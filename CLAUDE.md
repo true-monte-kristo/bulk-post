@@ -25,16 +25,25 @@ No external dependencies — stdlib `unittest` only.
 | `--csv` | `-c` | required | input CSV |
 | `--method` | `-m` | POST | HTTP method |
 | `--body` | `-b` | — | request body; supports `{{col}}` |
+| `--content-type` | `-C` | `application/json` | Content-Type for the body; JSON/XML templates validated at startup |
+| `--auth-type` | `-a` | `none` | auth method: `bearer`, `basic`, or `none` |
 | `--token` | `-t` | — | Bearer token; falls back to `BULK_TOKEN` env, then interactive prompt |
+| `--user` | `-U` | — | Basic auth `user:pass`; falls back to `BULK_USER` env, then interactive prompt |
 | `--delay` | `-d` | 0 | ms between requests |
 | `--offset` | `-o` | 0 | skip first N data rows (resume after failure) |
 | `--timeout` | `-T` | 30 | request timeout in seconds |
 | `--retry-file` | `-r` | `<stem>_failed.csv` | path for failed-rows CSV |
-| `--verbose` | `-v` | false | print request/response/timing per row |
+| `--verbose` | `-v` | false | print req/resp headers (Authorization masked), body, status, timing per row |
 
-## Token design
+## Auth design
 
-Token is a Keycloak SSO token obtained from browser DevTools — cannot be fetched programmatically. On 401, the script pauses and prompts for a fresh token, then retries the failed row.
+Three auth types via `--auth-type` / `-a` (default `none`):
+
+- **bearer** — `Authorization: Bearer <token>`. Token resolved: `--token` flag → `BULK_TOKEN` env → interactive prompt. On 401, pauses and prompts for a fresh token, then retries.
+- **basic** — `Authorization: Basic <base64>`. Credentials resolved: `--user` flag → `BULK_USER` env → interactive prompt. On 401, prompts for new credentials, then retries.
+- **none** — no `Authorization` header sent.
+
+Tokens/credentials are Keycloak SSO values obtained from browser DevTools and cannot be fetched programmatically.
 
 ## Terminal UI
 
@@ -45,7 +54,11 @@ When running in a real TTY (`termios` available), `_BottomBar` reserves the bott
 - `_get_suggestion(buf)` — completion suffix for partial `/command`
 - `substitute(template, row)` → `(str, err_or_None)` — `{{var}}` substitution
 - `count_csv_rows(path)` → `int` — data rows excluding header; 0 on error
-- `resolve_token(flag_value, bar=None)` → `str`
-- `http_request(url, token, method, body, timeout=30)` → `(status_or_None, body, elapsed_s)`
-- `prompt_new_token(bar=None)` → `str` — patch this in tests, not `input`
+- `resolve_token(flag_value, suspend=None, resume=None)` → `str` — bearer token from flag → `BULK_TOKEN` env → prompt
+- `prompt_new_token(suspend=None, resume=None)` → `str` — patch this in tests, not `input`
+- `resolve_basic_creds(flag_value, suspend=None, resume=None)` → `str` — `user:pass` from flag → `BULK_USER` env → prompt
+- `prompt_new_basic_creds(suspend=None, resume=None)` → `str` — patch this in tests, not `input`
+- `resolve_auth_header(args, suspend=None, resume=None)` → `Optional[str]` — returns full `Authorization` header value or `None` for auth_type `none`
+- `http_request(url, auth_header, method, body, timeout=30, content_type="application/json")` → `(status_or_None, body, elapsed_s, req_headers, resp_headers)`
+- `_mask_headers(headers)` → `dict` — replaces `Authorization` values with `*****`
 - `_run()` — full pipeline; patch `sys.argv` + `sys.stdin.isatty` to test

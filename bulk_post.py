@@ -784,7 +784,7 @@ def _run() -> None:
     parser = argparse.ArgumentParser(description="Bulk HTTP requests from CSV rows")
     parser.add_argument("--url", "-u", required=True, help="Target URL, may contain {{variable}} placeholders")
     parser.add_argument("--auth-type", "-a", default="none", choices=["bearer", "basic", "none"],
-                        dest="auth_type", help="Auth method: bearer (default), basic, or none")
+                        dest="auth_type", help="Auth method: bearer, basic, or none (default)")
     parser.add_argument("--token", "-t", default=None,
                         help="Bearer token (overrides BULK_TOKEN env var); used with --auth-type bearer")
     parser.add_argument("--user", "-U", default=None,
