@@ -250,44 +250,45 @@ class TestHttpRequest(unittest.TestCase):
         m = MagicMock()
         m.status = status
         m.read.return_value = body
+        m.headers = {}
         m.__enter__.return_value = m
         m.__exit__.return_value = False
         return m
 
     def test_200_returns_status_and_body(self):
         with patch("urllib.request.urlopen", return_value=self._mock_resp(200, b'{"ok":true}')):
-            status, body, elapsed = bulk_post.http_request("http://x.com/", "tok", "GET", None)
+            status, body, elapsed, *_ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
         self.assertEqual(status, 200)
         self.assertEqual(body, '{"ok":true}')
         self.assertGreaterEqual(elapsed, 0)
 
     def test_201_success(self):
         with patch("urllib.request.urlopen", return_value=self._mock_resp(201, b"created")):
-            status, _, _ = bulk_post.http_request("http://x.com/", "tok", "POST", '{}')
+            status, *_ = bulk_post.http_request("http://x.com/", "tok", "POST", '{}')
         self.assertEqual(status, 201)
 
     def test_http_error_404(self):
         err = urllib.error.HTTPError("http://x.com/", 404, "Not Found", {}, BytesIO(b"not found"))
         with patch("urllib.request.urlopen", side_effect=err):
-            status, body, _ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
+            status, body, *_ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
         self.assertEqual(status, 404)
         self.assertEqual(body, "not found")
 
     def test_http_error_401(self):
         err = urllib.error.HTTPError("http://x.com/", 401, "Unauthorized", {}, BytesIO(b""))
         with patch("urllib.request.urlopen", side_effect=err):
-            status, _, _ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
+            status, *_ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
         self.assertEqual(status, 401)
 
     def test_url_error_returns_none_status(self):
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
-            status, body, _ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
+            status, body, *_ = bulk_post.http_request("http://x.com/", "tok", "GET", None)
         self.assertIsNone(status)
         self.assertIn("Connection error", body)
 
     def test_timeout_error_returns_none_status(self):
         with patch("urllib.request.urlopen", side_effect=TimeoutError()):
-            status, body, _ = bulk_post.http_request("http://x.com/", "tok", "GET", None, timeout=5)
+            status, body, *_ = bulk_post.http_request("http://x.com/", "tok", "GET", None, timeout=5)
         self.assertIsNone(status)
         self.assertIn("timed out", body)
         self.assertIn("5s", body)
@@ -384,6 +385,7 @@ class TestRun(unittest.TestCase):
         m = MagicMock()
         m.status = status
         m.read.return_value = body
+        m.headers = {}
         m.__enter__.return_value = m
         m.__exit__.return_value = False
         return m

@@ -457,35 +457,45 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
 
 
 def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30,
-                 content_type: str = "application/json") -> Tuple[Optional[int], str, float]:
-    """Returns (status_or_None, response_body, elapsed_seconds)."""
+                 content_type: str = "application/json") -> Tuple[Optional[int], str, float, dict, dict]:
+    """Returns (status_or_None, response_body, elapsed_seconds, req_headers, resp_headers)."""
     encoded_body = body.encode("utf-8") if body else None
-    headers: dict = {}
+    req_headers: dict = {}
     if auth_header:
-        headers["Authorization"] = auth_header
+        req_headers["Authorization"] = auth_header
     if encoded_body:
-        headers["Content-Type"] = content_type
-    req = urllib.request.Request(url, data=encoded_body, method=method, headers=headers)
+        req_headers["Content-Type"] = content_type
+    req = urllib.request.Request(url, data=encoded_body, method=method, headers=req_headers)
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             response_body = resp.read().decode("utf-8", errors="replace")
-            return resp.status, response_body, time.monotonic() - t0
+            resp_headers = {k: v for k, v in resp.headers.items()}
+            return resp.status, response_body, time.monotonic() - t0, req_headers, resp_headers
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace"), time.monotonic() - t0
+        resp_headers = {k: v for k, v in e.headers.items()} if e.headers else {}
+        return e.code, e.read().decode("utf-8", errors="replace"), time.monotonic() - t0, req_headers, resp_headers
     except urllib.error.URLError as e:
-        return None, f"Connection error: {e.reason}", time.monotonic() - t0
+        return None, f"Connection error: {e.reason}", time.monotonic() - t0, req_headers, {}
     except TimeoutError:
-        return None, f"Request timed out ({timeout}s)", time.monotonic() - t0
+        return None, f"Request timed out ({timeout}s)", time.monotonic() - t0, req_headers, {}
 
 
-def print_verbose(bar: Optional[_BottomBar], method: str, url: str, req_body: Optional[str], status: Optional[int],
-                  resp_body: str, elapsed: float) -> None:
+def _mask_headers(headers: dict) -> dict:
+    return {k: "*****" if k.lower() == "authorization" else v for k, v in headers.items()}
+
+
+def print_verbose(bar: Optional[_BottomBar], method: str, url: str, req_body: Optional[str], req_headers: dict,
+                  status: Optional[int], resp_body: str, resp_headers: dict, elapsed: float) -> None:
     _out(bar, f"  > {method} {url}")
+    for k, v in _mask_headers(req_headers).items():
+        _out(bar, f"  > {k}: {v}")
     if req_body:
         _out(bar, f"  > body: {req_body}")
     status_str = str(status) if status is not None else "ERR"
     _out(bar, f"  < {status_str}  ({elapsed * 1000:.0f} ms)")
+    for k, v in resp_headers.items():
+        _out(bar, f"  < {k}: {v}")
     if resp_body:
         _out(bar, f"  < {resp_body[:500]}")
 
@@ -542,8 +552,10 @@ def _write_failure_log(
         method: str,
         url: str,
         req_body: Optional[str],
+        req_headers: dict,
         status: Optional[int],
         resp_body: str,
+        resp_headers: dict,
         elapsed: float,
 ) -> None:
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -551,11 +563,19 @@ def _write_failure_log(
     if url:
         parts.append(f"Method:   {method}")
         parts.append(f"URL:      {url}")
+        if req_headers:
+            parts.append("Req-Headers:")
+            for k, v in _mask_headers(req_headers).items():
+                parts.append(f"  {k}: {v}")
         if req_body:
             parts.append(f"Body:     {req_body}")
         status_str = str(status) if status is not None else "ERR"
         parts.append(f"Status:   {status_str}")
         parts.append(f"Elapsed:  {elapsed * 1000:.0f} ms")
+        if resp_headers:
+            parts.append("Resp-Headers:")
+            for k, v in resp_headers.items():
+                parts.append(f"  {k}: {v}")
         if resp_body:
             parts.append(f"Response: {resp_body.strip()[:1000]}")
     else:
@@ -587,25 +607,25 @@ def _fire(
         auth_header: Optional[str],
         suspend: Optional[Callable],
         resume: Optional[Callable],
-) -> Tuple[Optional[int], str, float, str, Optional[str], Optional[str]]:
+) -> Tuple[Optional[int], str, float, str, Optional[str], Optional[str], dict, dict]:
     """
     Substitute placeholders, fire the request (with one 401 retry), return
-    (status, response_body, elapsed, final_url, new_auth_header_or_None, req_body).
-    Returns (None, err_message, 0, "", None, None) on substitution error.
+    (status, response_body, elapsed, final_url, new_auth_header_or_None, req_body, req_headers, resp_headers).
+    Returns (None, err_message, 0, "", None, None, {}, {}) on substitution error.
     """
     url, err = substitute(args.url, row)
     if err:
-        return None, err, 0.0, "", None, None
+        return None, err, 0.0, "", None, None, {}, {}
 
     req_body: Optional[str] = None
     if args.body:
         req_body, err = substitute(cast(str, args.body), row)
         if err:
-            return None, err, 0.0, url, None, None
+            return None, err, 0.0, url, None, None, {}, {}
         ct = args.content_type
     else:
         ct = "application/json"
-    status, body, elapsed = http_request(url, auth_header, args.method, req_body, args.timeout, ct)
+    status, body, elapsed, req_headers, resp_headers = http_request(url, auth_header, args.method, req_body, args.timeout, ct)
 
     new_auth_header: Optional[str] = None
     if status == 401 and args.auth_type != "none":
@@ -615,9 +635,9 @@ def _fire(
         else:
             refreshed = prompt_new_basic_creds(suspend=suspend, resume=resume)
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
-        status, body, elapsed = http_request(url, new_auth_header, args.method, req_body, args.timeout, ct)
+        status, body, elapsed, req_headers, resp_headers = http_request(url, new_auth_header, args.method, req_body, args.timeout, ct)
 
-    return status, body, elapsed, url, new_auth_header, req_body
+    return status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers
 
 
 def _log_row(
@@ -629,11 +649,13 @@ def _log_row(
         elapsed: float,
         url: str,
         req_body: Optional[str],
+        req_headers: dict,
+        resp_headers: dict,
 ) -> bool:
     """Print per-row output. Returns True if the row succeeded."""
     method = args.method
     if args.verbose:
-        print_verbose(bar, method, url, req_body, status, body, elapsed)
+        print_verbose(bar, method, url, req_body, req_headers, status, body, resp_headers, elapsed)
 
     if status is not None and 200 <= status < 300:
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
@@ -721,22 +743,22 @@ def _run_loop(
     for line_num, row in enumerate(reader, start=offset + 1):
         processed += 1
         absolute = offset + processed
-        status, body, elapsed, url, new_auth_header, req_body = _fire(row, args, auth_header, suspend, resume)
+        status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers = _fire(row, args, auth_header, suspend, resume)
         if new_auth_header:
             auth_header = new_auth_header
         if status is None and not url:
             failed += 1
             retry_writer.writerow(row)
             _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
-            _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, None, body, 0.0)
+            _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, {}, None, body, {}, 0.0)
             _progress(bar, absolute, total_rows)
             continue
-        succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body)
+        succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body, req_headers, resp_headers)
         ok += int(succeeded)
         if not succeeded:
             failed += 1
             retry_writer.writerow(row)
-            _write_failure_log(log_file, "FAIL", line_num, args.method, url, req_body, status, body, elapsed)
+            _write_failure_log(log_file, "FAIL", line_num, args.method, url, req_body, req_headers, status, body, resp_headers, elapsed)
         _progress(bar, absolute, total_rows)
         cmd = _poll_cmd(bar)
         if _handle_cmd_in_loop(cmd, bar, line_num, ok, failed):
