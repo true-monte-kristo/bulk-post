@@ -943,6 +943,7 @@ def _run_parallel(
             cmd = _poll_cmd(bar)
             if cmd == _CMD_EXIT:
                 state.stop_event.set()
+                state.pause_event.set()  # unblock workers stuck in pause_event.wait()
                 with state.output_lock:
                     _out(bar, f"{_GREY}[EXIT]  Stopping after current requests finish.{_RESET}")
                 break

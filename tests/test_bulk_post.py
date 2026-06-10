@@ -762,6 +762,49 @@ class TestParallelRun(unittest.TestCase):
             f"expected '[worker-N]' prefix in output; got: {row_lines}",
         )
 
+    def test_parallel_exit_while_paused_does_not_hang(self):
+        """Regression: /exit while paused must unblock workers and complete."""
+        import threading as _threading
+        rows = [{"id": str(i)} for i in range(1, 20)]
+        csv_path = self._write_csv("data.csv", rows)
+
+        cmd_queue = []
+
+        def mock_poll(bar):
+            import time
+            time.sleep(0.05)
+            if not cmd_queue:
+                return None
+            return cmd_queue.pop(0)
+
+        # Slow requests so workers are still running when we send /pause then /exit
+        def slow_resp(req, timeout=None):
+            import time
+            time.sleep(0.02)
+            return self._mock_resp(200, b"ok")
+
+        result = {}
+
+        def run():
+            with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                     "-a", "none", "--parallel", "-n", "2"]), \
+                 patch("sys.stdin.isatty", return_value=False), \
+                 patch("urllib.request.urlopen", side_effect=slow_resp), \
+                 patch("bulk_post._poll_cmd", side_effect=mock_poll):
+                bulk_post._run()
+            result["done"] = True
+
+        t = _threading.Thread(target=run, daemon=True)
+        t.start()
+        import time
+        time.sleep(0.15)           # let some rows start
+        cmd_queue.append("/pause")
+        time.sleep(0.1)            # let pause take effect
+        cmd_queue.append("/exit")
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "script hung after /exit while paused")
+        self.assertTrue(result.get("done"), "script did not complete cleanly")
+
     def test_debug_without_parallel_prints_info(self):
         import io
         rows = [{"id": "1"}]
