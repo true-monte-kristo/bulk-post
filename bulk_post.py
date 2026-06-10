@@ -715,7 +715,7 @@ def _run_loop(
         log_file: IO[str],
         offset: int,
         total_rows: int,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     remaining = total_rows - offset
     processed = ok = failed = 0
     for line_num, row in enumerate(reader, start=offset + 2):
@@ -743,7 +743,7 @@ def _run_loop(
             break
         if args.delay > 0 and processed < remaining:
             time.sleep(args.delay / 1000)
-    return ok, failed
+    return ok, failed, processed
 
 
 # ---------------------------------------------------------------------------
@@ -828,8 +828,8 @@ def _run() -> None:
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
             log_file = _open_log_file(log_path)
             try:
-                ok, failed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset,
-                                       total_rows)
+                ok, failed, processed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset,
+                                                  total_rows)
             finally:
                 retry_file.close()
                 log_file.close()
@@ -838,14 +838,14 @@ def _run() -> None:
             bar.stop()
 
     if failed:
-        print(f"\nDone — {total_rows - offset} rows processed: {ok} succeeded, {failed} failed.")
+        print(f"\nDone — {processed} rows processed: {ok} succeeded, {failed} failed.")
         print(f"Failed rows saved to: {retry_path}")
         print(f"Failure log:          {log_path}")
         sys.exit(1)
     else:
         retry_path.unlink(missing_ok=True)
         log_path.unlink(missing_ok=True)
-        print(f"\nDone — {total_rows - offset} rows processed: {ok} succeeded, 0 failed.")
+        print(f"\nDone — {processed} rows processed: {ok} succeeded, 0 failed.")
 
 
 if __name__ == "__main__":
