@@ -96,13 +96,15 @@ class _BottomBar:
     Only used when sys.stdin.isatty() and termios is available.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, debug_mode: bool = False) -> None:
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._buf = ""
         self._nav_idx: int = -1  # -1 = free input; 0..len(_COMMANDS)-1 = navigating
         self._saved_buf: str = ""  # buffer snapshot taken when entering navigation
         self._h = 0
+        self._scroll_end = 0  # last row of scroll region; set in start()
+        self._debug_mode = debug_mode
         self._active = False
         self._thread: Optional[threading.Thread] = None
         self._old_settings = None
@@ -115,14 +117,14 @@ class _BottomBar:
     def start(self) -> bool:
         import shutil
         self._h = shutil.get_terminal_size((80, 24)).lines
-        if self._h < 5:
+        if self._h < (6 if self._debug_mode else 5):
             return False
         try:
             self._old_settings = termios.tcgetattr(sys.stdin.fileno())
         except termios.error:
             return False
-        # Set scroll region (rows 1..h-2) and draw the command prompt
-        sys.stdout.write(f"\033[1;{self._h - 2}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}")
+        self._scroll_end = self._h - (3 if self._debug_mode else 2)
+        sys.stdout.write(f"\033[1;{self._scroll_end}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}")
         sys.stdout.flush()
         self._active = True
         self._thread = threading.Thread(target=self._input_loop, daemon=True)
@@ -139,7 +141,11 @@ class _BottomBar:
             except termios.error:
                 pass
         # Reset scroll region and clear bottom rows
-        sys.stdout.write(f"\033[r\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K")
+        if self._debug_mode:
+            clear = f"\033[r\033[{self._h - 2};1H\033[2K\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K"
+        else:
+            clear = f"\033[r\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K"
+        sys.stdout.write(clear)
         sys.stdout.flush()
 
     def pause(self) -> None:
@@ -149,7 +155,7 @@ class _BottomBar:
         # Wait for the input thread to acknowledge it has left raw mode.
         self._paused_ack.wait(timeout=0.5)
         # Place cursor at the bottom of the scroll region for interactive prompts
-        sys.stdout.write(f"\033[{self._h - 2};1H\n\r")
+        sys.stdout.write(f"\033[{self._scroll_end};1H\n\r")
         sys.stdout.flush()
 
     def resume(self) -> None:
@@ -175,7 +181,7 @@ class _BottomBar:
             buf = self._buf
         # Move to last scrollable row → \n scrolls the region up → print on fresh row
         sys.stdout.write(
-            f"\033[{self._h - 2};1H\n\r{text}{_RESET}\033[K"
+            f"\033[{self._scroll_end};1H\n\r{text}{_RESET}\033[K"
             f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
         )
         sys.stdout.flush()
@@ -189,6 +195,17 @@ class _BottomBar:
             buf = self._buf
         sys.stdout.write(
             f"\033[{self._h - 1};1H\033[2K{line}"
+            f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
+        )
+        sys.stdout.flush()
+
+    def update_debug(self, text: str) -> None:
+        if not self._debug_mode:
+            return
+        with self._lock:
+            buf = self._buf
+        sys.stdout.write(
+            f"\033[{self._h - 2};1H\033[2K{_GREY}{text}{_RESET}"
             f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
         )
         sys.stdout.flush()
@@ -704,6 +721,7 @@ def _log_row(
         req_body: Optional[str],
         req_headers: dict,
         resp_headers: dict,
+        thread_tag: str = "",
 ) -> bool:
     """Print per-row output. Returns True if the row succeeded."""
     method = args.method
@@ -712,13 +730,13 @@ def _log_row(
 
     if status is not None and 200 <= status < 300:
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-        _out(bar, f"{_GREEN}[OK]    row {line_num}: {status} {url}{elapsed_str}{_RESET}")
+        _out(bar, f"{_GREEN}{thread_tag}[OK]    row {line_num}: {status} {url}{elapsed_str}{_RESET}")
         return True
     else:
         short_body = body[:200].replace("\n", " ")
         status_str = str(status) if status is not None else "ERR"
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-        _out(bar, f"{_RED}[FAIL]  row {line_num}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
+        _out(bar, f"{_RED}{thread_tag}[FAIL]  row {line_num}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
         return False
 
 
@@ -832,7 +850,9 @@ def _parallel_worker(
         log_file: "IO[str]",
         total_rows: int,
         auth_refresh_fn: Callable,
+        debug: bool = False,
 ) -> None:
+    thread_tag = f"[{threading.current_thread().name}] " if debug else ""
     while True:
         if state.stop_event.is_set():
             break
@@ -859,7 +879,7 @@ def _parallel_worker(
 
         if status is None and not url:
             with state.output_lock:
-                _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
+                _out(bar, f"{_RED}{thread_tag}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
                 _progress(bar, absolute, total_rows)
             with state.lock:
                 state.failed += 1
@@ -867,7 +887,8 @@ def _parallel_worker(
                 _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, {}, None, body, {}, 0.0)
         else:
             with state.output_lock:
-                succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body, req_headers, resp_headers)
+                succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body, req_headers,
+                                     resp_headers, thread_tag=thread_tag)
                 _progress(bar, absolute, total_rows)
             with state.lock:
                 if succeeded:
@@ -902,18 +923,21 @@ def _run_parallel(
     state = _ParallelState(auth_header)
     auth_refresh_fn = _make_auth_refresh_fn(args, state, suspend, resume)
     n_workers = min(args.concurrency_level, work_queue.qsize())
+    debug = getattr(args, 'debug', False)
 
     threads = [
         threading.Thread(
             target=_parallel_worker,
-            args=(work_queue, args, state, bar, suspend, resume, retry_writer, log_file, total_rows, auth_refresh_fn),
+            name=f"worker-{i + 1}",
+            args=(work_queue, args, state, bar, suspend, resume, retry_writer, log_file, total_rows, auth_refresh_fn, debug),
             daemon=True,
         )
-        for _ in range(n_workers)
+        for i in range(n_workers)
     ]
     for t in threads:
         t.start()
 
+    _debug_ts = 0.0
     try:
         while any(t.is_alive() for t in threads):
             cmd = _poll_cmd(bar)
@@ -930,6 +954,19 @@ def _run_parallel(
                 state.pause_event.set()
                 with state.output_lock:
                     _out(bar, "[RESUMED]")
+            if debug:
+                now = time.monotonic()
+                if now - _debug_ts >= 0.5:
+                    _debug_ts = now
+                    n_active = sum(t.is_alive() for t in threads)
+                    pending = work_queue.qsize()
+                    with state.lock:
+                        ok_n, fail_n = state.ok, state.failed
+                    dbg = f"  [debug]  Q: {pending} pending  |  threads: {n_active}/{len(threads)}  |  ok: {ok_n}  fail: {fail_n}"
+                    if bar:
+                        bar.update_debug(dbg)
+                    else:
+                        print(dbg, file=sys.stderr)
             time.sleep(0.05)
     finally:
         for t in threads:
@@ -976,6 +1013,8 @@ def _run() -> None:
     parser.add_argument("--concurrency-level", "-n", type=int, default=os.cpu_count() or 4,
                         dest="concurrency_level",
                         help=f"Number of parallel worker threads (default: {os.cpu_count() or 4}); only used with --parallel")
+    parser.add_argument("--debug", "-D", action="store_true", default=False,
+                        help="Print diagnostic info per row (thread name, queue depth); only meaningful with --parallel")
     args = parser.parse_args()
     args.method = args.method.upper()
 
@@ -1011,9 +1050,12 @@ def _run() -> None:
     if args.parallel and args.delay > 0:
         print("[INFO] --delay is ignored in parallel mode.", file=sys.stderr)
 
+    if args.debug and not args.parallel:
+        print("[INFO] --debug has no effect without --parallel.", file=sys.stderr)
+
     bar: Optional[_BottomBar] = None
     if sys.stdin.isatty() and _HAS_TERMIOS:
-        b = _BottomBar()
+        b = _BottomBar(debug_mode=args.debug and args.parallel)
         if b.start():
             bar = b
 

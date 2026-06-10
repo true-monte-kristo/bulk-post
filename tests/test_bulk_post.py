@@ -743,6 +743,40 @@ class TestParallelRun(unittest.TestCase):
         self.assertNotIn("http://t.com/1", urls_called)
         self.assertIn("http://t.com/10", urls_called)
 
+    def test_debug_flag_prefixes_thread_name_in_output(self):
+        rows = [{"id": str(i)} for i in range(1, 4)]
+        csv_path = self._write_csv("data.csv", rows)
+        printed = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "2", "--debug"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: self._mock_resp(200, b"ok")), \
+             patch("builtins.print", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
+            bulk_post._run()
+
+        row_lines = [l for l in printed if "[OK]" in l]
+        self.assertTrue(row_lines, "expected at least one [OK] line")
+        self.assertTrue(
+            any("[worker-" in l for l in row_lines),
+            f"expected '[worker-N]' prefix in output; got: {row_lines}",
+        )
+
+    def test_debug_without_parallel_prints_info(self):
+        import io
+        rows = [{"id": "1"}]
+        csv_path = self._write_csv("data.csv", rows)
+        stderr_buf = io.StringIO()
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--debug"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: self._mock_resp(200, b"ok")), \
+             patch("sys.stderr", stderr_buf):
+            bulk_post._run()
+
+        self.assertIn("--debug has no effect without --parallel", stderr_buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
