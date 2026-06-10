@@ -360,6 +360,28 @@ class TestHttpRequest(unittest.TestCase):
             bulk_post.http_request("http://x.com/", None, "GET", None)
         self.assertIsNone(captured[0].get_header("Authorization"))
 
+    def test_extra_headers_sent(self):
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", None, "GET", None,
+                                   extra_headers={"X-Tenant": "acme", "X-Request-Id": "42"})
+        self.assertEqual(captured[0].get_header("X-tenant"), "acme")
+        self.assertEqual(captured[0].get_header("X-request-id"), "42")
+
+    def test_auth_overrides_extra_header_with_same_name(self):
+        """auth_header should win if extra_headers contains Authorization."""
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", "Bearer real-token", "GET", None,
+                                   extra_headers={"Authorization": "Bearer wrong-token"})
+        self.assertEqual(captured[0].get_header("Authorization"), "Bearer real-token")
+
 
 # ---------------------------------------------------------------------------
 # _run integration tests
@@ -599,6 +621,90 @@ class TestRun(unittest.TestCase):
 
         expected = "Basic " + base64.b64encode(b"alice:s3cret").decode()
         self.assertEqual(captured[0].get_header("Authorization"), expected)
+
+    def test_custom_header_sent_on_every_request(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}, {"id": "2"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Tenant: acme"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(len(captured), 2)
+        for req in captured:
+            self.assertEqual(req.get_header("X-tenant"), "acme")
+
+    def test_custom_header_value_supports_placeholder(self):
+        csv_path = self._write_csv("data.csv", [{"id": "42", "tenant": "acme"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Tenant: {{tenant}}"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(captured[0].get_header("X-tenant"), "acme")
+
+    def test_multiple_custom_headers(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Foo: bar", "-H", "X-Baz: qux"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(captured[0].get_header("X-foo"), "bar")
+        self.assertEqual(captured[0].get_header("X-baz"), "qux")
+
+    def test_bad_header_format_exits(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        calls = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "BadHeaderNoColon"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(calls, [])
+
+    def test_header_placeholder_missing_from_csv_exits(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        calls = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Tenant: {{tenant}}"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(calls, [])
 
     def test_no_auth_sends_no_authorization_header(self):
         csv_path = self._write_csv("data.csv", [{"id": "1"}])

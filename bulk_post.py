@@ -494,10 +494,13 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
 
 
 def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30,
-                 content_type: str = "application/json") -> Tuple[Optional[int], str, float, dict, dict]:
+                 content_type: str = "application/json",
+                 extra_headers: Optional[dict] = None) -> Tuple[Optional[int], str, float, dict, dict]:
     """Returns (status_or_None, response_body, elapsed_seconds, req_headers, resp_headers)."""
     encoded_body = body.encode("utf-8") if body else None
     req_headers: dict = {}
+    if extra_headers:
+        req_headers.update(extra_headers)
     if auth_header:
         req_headers["Authorization"] = auth_header
     if encoded_body:
@@ -693,7 +696,17 @@ def _fire(
         ct = args.content_type
     else:
         ct = "application/json"
-    status, body, elapsed, req_headers, resp_headers = http_request(url, auth_header, args.method, req_body, args.timeout, ct)
+
+    extra_headers: dict = {}
+    for raw in (args.header or []):
+        name, _, val_tmpl = raw.partition(": ")
+        val, herr = substitute(val_tmpl, row)
+        if herr:
+            return None, herr, 0.0, url, None, None, {}, {}
+        extra_headers[name] = val
+
+    status, body, elapsed, req_headers, resp_headers = http_request(
+        url, auth_header, args.method, req_body, args.timeout, ct, extra_headers)
 
     new_auth_header: Optional[str] = None
     if status == 401 and args.auth_type != "none":
@@ -705,7 +718,8 @@ def _fire(
         else:
             refreshed = prompt_new_basic_creds(suspend=suspend, resume=resume)
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
-        status, body, elapsed, req_headers, resp_headers = http_request(url, new_auth_header, args.method, req_body, args.timeout, ct)
+        status, body, elapsed, req_headers, resp_headers = http_request(
+            url, new_auth_header, args.method, req_body, args.timeout, ct, extra_headers)
 
     return status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers
 
@@ -741,7 +755,19 @@ def _log_row(
 
 
 def _validate_placeholders(args: argparse.Namespace, fieldnames: Optional[list]) -> None:
-    all_placeholders = PLACEHOLDER_RE.findall(args.url) + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
+    header_val_placeholders: list = []
+    for raw in (args.header or []):
+        if ": " not in raw:
+            print(f"[ERROR] --header value must be in 'Name: value' format, got: {raw!r}", file=sys.stderr)
+            sys.exit(1)
+        _, _, val_tmpl = raw.partition(": ")
+        header_val_placeholders += PLACEHOLDER_RE.findall(val_tmpl)
+
+    all_placeholders = (
+        PLACEHOLDER_RE.findall(args.url)
+        + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
+        + header_val_placeholders
+    )
     if not all_placeholders:
         return
     missing = [p for p in all_placeholders if p not in (fieldnames or [])]
@@ -1014,6 +1040,8 @@ def _run() -> None:
     parser.add_argument("--concurrency-level", "-n", type=int, default=os.cpu_count() or 4,
                         dest="concurrency_level",
                         help=f"Number of parallel worker threads (default: {os.cpu_count() or 4}); only used with --parallel")
+    parser.add_argument("--header", "-H", action="append", default=None, metavar="NAME: VALUE",
+                        help="Add a custom request header; repeatable. Value supports {{col}} placeholders.")
     parser.add_argument("--debug", "-D", action="store_true", default=False,
                         help="Print diagnostic info per row (thread name, queue depth); only meaningful with --parallel")
     args = parser.parse_args()
