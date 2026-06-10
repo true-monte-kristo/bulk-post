@@ -718,7 +718,7 @@ def _run_loop(
 ) -> Tuple[int, int, int]:
     remaining = total_rows - offset
     processed = ok = failed = 0
-    for line_num, row in enumerate(reader, start=offset + 2):
+    for line_num, row in enumerate(reader, start=offset + 1):
         processed += 1
         absolute = offset + processed
         status, body, elapsed, url, new_auth_header, req_body = _fire(row, args, auth_header, suspend, resume)
