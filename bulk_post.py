@@ -26,6 +26,7 @@ import argparse
 import contextlib
 import csv
 import datetime
+import json
 import os
 import pathlib
 import queue
@@ -36,6 +37,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import xml.etree.ElementTree as _ET
 from typing import Any, IO, Callable, Optional, Tuple, cast
 
 try:
@@ -395,12 +397,12 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
     return PLACEHOLDER_RE.sub(lambda m: row[m.group(1)], template), None
 
 
-def http_request(url: str, token: str, method: str, body: Optional[str], timeout: int = 30) -> Tuple[Optional[int], str, float]:
+def http_request(url: str, token: str, method: str, body: Optional[str], timeout: int = 30, content_type: str = "application/json") -> Tuple[Optional[int], str, float]:
     """Returns (status_or_None, response_body, elapsed_seconds)."""
     encoded_body = body.encode("utf-8") if body else None
     headers = {"Authorization": f"Bearer {token}"}
     if encoded_body:
-        headers["Content-Type"] = "application/json"
+        headers["Content-Type"] = content_type
     req = urllib.request.Request(url, data=encoded_body, method=method, headers=headers)
     t0 = time.monotonic()
     try:
@@ -437,14 +439,17 @@ def _stdin_command() -> Optional[str]:
     return None
 
 
-def _wait_for_resume() -> None:
+def _wait_for_resume() -> bool:
+    """Return True if /exit was requested while paused."""
     print("\n[PAUSED]  Type /resume to continue...", flush=True)
     while True:
         time.sleep(0.2)
         cmd = _stdin_command()
         if cmd == _CMD_RESUME:
             print("[RESUMED]", flush=True)
-            return
+            return False
+        if cmd == _CMD_EXIT:
+            return True
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +502,22 @@ def _write_failure_log(
     log_file.flush()
 
 
+def _validate_body_template(template: str, content_type: str) -> Optional[str]:
+    dummy = PLACEHOLDER_RE.sub("null", template)
+    ct = content_type.lower()
+    if "json" in ct:
+        try:
+            json.loads(dummy)
+        except json.JSONDecodeError as e:
+            return f"Invalid JSON body template: {e}"
+    elif "xml" in ct:
+        try:
+            _ET.fromstring(dummy)
+        except _ET.ParseError as e:
+            return f"Invalid XML body template: {e}"
+    return None
+
+
 def _fire(
     row: dict,
     args,
@@ -518,13 +539,15 @@ def _fire(
         req_body, err = substitute(cast(str, args.body), row)
         if err:
             return None, err, 0.0, url, None
-
-    status, body, elapsed = http_request(url, token, args.method, req_body, args.timeout)
+        ct = args.content_type
+    else:
+        ct = "application/json"
+    status, body, elapsed = http_request(url, token, args.method, req_body, args.timeout, ct)
 
     new_token: Optional[str] = None
     if status == 401:
         refreshed = prompt_new_token(suspend=suspend, resume=resume)
-        status, body, elapsed = http_request(url, refreshed, args.method, req_body, args.timeout)
+        status, body, elapsed = http_request(url, refreshed, args.method, req_body, args.timeout, ct)
         new_token = refreshed
 
     return status, body, elapsed, url, new_token
@@ -565,6 +588,11 @@ def _validate_placeholders(args: argparse.Namespace, fieldnames: Optional[list])
     if missing:
         print(f"[ERROR] CSV is missing columns required by placeholders: {missing}", file=sys.stderr)
         sys.exit(1)
+    if args.body:
+        err = _validate_body_template(args.body, args.content_type)
+        if err:
+            print(f"[ERROR] {err}", file=sys.stderr)
+            sys.exit(1)
 
 
 def _skip_rows(reader: csv.DictReader, count: int, bar: Optional[_BottomBar]) -> None:
@@ -590,11 +618,17 @@ def _handle_cmd_in_loop(
             bar.write_line("[PAUSED]  Type /resume to continue...")
             while True:
                 time.sleep(0.1)
-                if bar.poll() == _CMD_RESUME:
+                paused_cmd = bar.poll()
+                if paused_cmd == _CMD_RESUME:
                     bar.write_line("[RESUMED]")
                     break
+                if paused_cmd == _CMD_EXIT:
+                    _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+                    return True
         else:
-            _wait_for_resume()
+            if _wait_for_resume():
+                _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+                return True
     return False
 
 
@@ -666,6 +700,7 @@ def _run() -> None:
     parser.add_argument("--csv", "-c", required=True, dest="csv_path", help="Path to CSV file")
     parser.add_argument("--method", "-m", default="POST", help="HTTP method (default: POST)")
     parser.add_argument("--body", "-b", default=None, help="Request body (e.g. JSON string)")
+    parser.add_argument("--content-type", "-C", default="application/json", dest="content_type", help="Content-Type header (default: application/json)")
     parser.add_argument("--delay", "-d", type=int, default=0, help="Delay in milliseconds between requests (default: 0)")
     parser.add_argument("--offset", "-o", type=int, default=0, help="Skip first N data rows (default: 0)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print request/response details and timing")
@@ -692,6 +727,18 @@ def _run() -> None:
         print(f"[ERROR] Cannot open CSV file: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Read only the header to validate placeholders/body before starting the bar
+    # or prompting for a token, so errors are always visible in a clean terminal.
+    with csv_file:
+        fieldnames: list = list(csv.DictReader(csv_file).fieldnames or [])
+    _validate_placeholders(args, fieldnames)
+
+    try:
+        csv_file = open(csv_path, newline="", encoding="utf-8")
+    except OSError as e:
+        print(f"[ERROR] Cannot open CSV file: {e}", file=sys.stderr)
+        sys.exit(1)
+
     bar: Optional[_BottomBar] = None
     if sys.stdin.isatty() and _HAS_TERMIOS:
         b = _BottomBar()
@@ -705,8 +752,6 @@ def _run() -> None:
     try:
         with csv_file:
             reader = csv.DictReader(csv_file)
-            fieldnames: list = list(reader.fieldnames or [])
-            _validate_placeholders(args, fieldnames)
             _skip_rows(reader, offset, bar)
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
             log_file = _open_log_file(log_path)

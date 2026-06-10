@@ -51,6 +51,17 @@ bulk-post \
   -v
 ```
 
+POST form-encoded data:
+
+```bash
+bulk-post \
+  -u "https://api.example.com/items" \
+  -c items.csv \
+  -m POST \
+  -b "id={{id}}&status={{status}}" \
+  -C "application/x-www-form-urlencoded"
+```
+
 Resume after a failure at row 47:
 
 ```bash
@@ -65,11 +76,13 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 | `--csv` | `-c` | required | Path to the input CSV file |
 | `--method` | `-m` | `POST` | HTTP method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, …) |
 | `--body` | `-b` | — | Request body; supports `{{col}}` placeholders |
+| `--content-type` | `-C` | `application/json` | `Content-Type` header sent with the request body; ignored when no body is provided. When set to a JSON or XML type, the body template is validated once at startup before any requests are sent — the script exits immediately with an error if the template is structurally invalid |
 | `--token` | `-t` | — | Bearer token (see [Token](#token) below) |
 | `--delay` | `-d` | `0` | Milliseconds to wait between requests |
 | `--offset` | `-o` | `0` | Skip the first N data rows (useful for resuming after a failure) |
 | `--timeout` | `-T` | `30` | Per-request timeout in seconds |
 | `--retry-file` | `-r` | `<stem>_failed.csv` | Where to write rows that failed; auto-named from the CSV path if omitted |
+| `--content-type` | `-C` | `application/json` | `Content-Type` header for the request body |
 | `--verbose` | `-v` | false | Print URL, status, response body, and timing for every row |
 
 ## CSV format

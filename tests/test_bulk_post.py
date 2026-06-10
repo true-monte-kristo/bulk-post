@@ -163,6 +163,50 @@ class TestResolveToken(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# _validate_body_template
+# ---------------------------------------------------------------------------
+
+class TestValidateBodyTemplate(unittest.TestCase):
+    def test_valid_json_literal_returns_none(self):
+        self.assertIsNone(bulk_post._validate_body_template('{"id":1}', "application/json"))
+
+    def test_valid_json_with_placeholder_returns_none(self):
+        self.assertIsNone(bulk_post._validate_body_template('{"id":"{{id}}"}', "application/json"))
+
+    def test_valid_json_unquoted_placeholder_returns_none(self):
+        # {{amount}} → null, giving {"amount": null} which is valid JSON
+        self.assertIsNone(bulk_post._validate_body_template('{"amount":{{amount}}}', "application/json"))
+
+    def test_invalid_json_template_returns_error(self):
+        err = bulk_post._validate_body_template("{bad json {{id}}}", "application/json")
+        self.assertIsNotNone(err)
+        self.assertIn("Invalid JSON", err)
+
+    def test_valid_xml_with_placeholder_returns_none(self):
+        self.assertIsNone(bulk_post._validate_body_template("<item><id>{{id}}</id></item>", "application/xml"))
+
+    def test_invalid_xml_template_returns_error(self):
+        err = bulk_post._validate_body_template("<root><unclosed {{id}}>", "application/xml")
+        self.assertIsNotNone(err)
+        self.assertIn("Invalid XML", err)
+
+    def test_text_xml_content_type(self):
+        self.assertIsNone(bulk_post._validate_body_template("<a/>", "text/xml"))
+
+    def test_unknown_content_type_skips_validation(self):
+        self.assertIsNone(bulk_post._validate_body_template("not json or xml", "application/x-www-form-urlencoded"))
+
+    def test_json_content_type_case_insensitive(self):
+        self.assertIsNone(bulk_post._validate_body_template('{"x":"{{v}}"}', "Application/JSON"))
+
+    def test_empty_body_invalid_json(self):
+        self.assertIsNotNone(bulk_post._validate_body_template("", "application/json"))
+
+    def test_empty_body_invalid_xml(self):
+        self.assertIsNotNone(bulk_post._validate_body_template("", "application/xml"))
+
+
+# ---------------------------------------------------------------------------
 # http_request
 # ---------------------------------------------------------------------------
 
@@ -229,6 +273,26 @@ class TestHttpRequest(unittest.TestCase):
             return self._mock_resp(200)
         with patch("urllib.request.urlopen", side_effect=capture):
             bulk_post.http_request("http://x.com/", "tok", "GET", None)
+        self.assertIsNone(captured[0].get_header("Content-type"))
+
+    def test_custom_content_type_used_when_body_present(self):
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", "tok", "POST", "id=1&v=2",
+                                   content_type="application/x-www-form-urlencoded")
+        self.assertEqual(captured[0].get_header("Content-type"), "application/x-www-form-urlencoded")
+
+    def test_no_body_ignores_custom_content_type(self):
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", "tok", "GET", None,
+                                   content_type="application/x-www-form-urlencoded")
         self.assertIsNone(captured[0].get_header("Content-type"))
 
     def test_bearer_token_in_auth_header(self):
@@ -394,6 +458,70 @@ class TestRun(unittest.TestCase):
             bulk_post._run()
 
         self.assertEqual(bodies_sent, ['{"id":"1"}', '{"id":"2"}'])
+
+    def test_content_type_flag_sets_header(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/", "-c", csv_path, "-t", "tok",
+                                 "-b", "id={{id}}", "-C", "application/x-www-form-urlencoded"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(captured[0].get_header("Content-type"), "application/x-www-form-urlencoded")
+
+    def test_invalid_json_body_exits_before_any_request(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        calls = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/", "-c", csv_path, "-t", "tok",
+                                 "-b", "{bad json {{id}}}", "-C", "application/json"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(calls, [])
+
+    def test_invalid_xml_body_exits_before_any_request(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        calls = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/", "-c", csv_path, "-t", "tok",
+                                 "-b", "<root><unclosed {{id}}>", "-C", "application/xml"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(calls, [])
+
+    def test_default_content_type_is_json(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/", "-c", csv_path, "-t", "tok",
+                                 "-b", '{"id":"{{id}}"}']), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(captured[0].get_header("Content-type"), "application/json")
 
 
 if __name__ == "__main__":
