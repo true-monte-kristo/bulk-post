@@ -77,12 +77,13 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 | `--method` | `-m` | `POST` | HTTP method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, …) |
 | `--body` | `-b` | — | Request body; supports `{{col}}` placeholders |
 | `--content-type` | `-C` | `application/json` | `Content-Type` header sent with the request body; ignored when no body is provided. When set to a JSON or XML type, the body template is validated once at startup before any requests are sent — the script exits immediately with an error if the template is structurally invalid |
-| `--token` | `-t` | — | Bearer token (see [Token](#token) below) |
+| `--auth-type` | `-a` | `bearer` | Auth method: `bearer`, `basic`, or `none` |
+| `--token` | `-t` | — | Bearer token; used with `--auth-type bearer` (see [Auth](#auth) below) |
+| `--user` | `-U` | — | Basic auth credentials as `user:pass`; used with `--auth-type basic` (see [Auth](#auth) below) |
 | `--delay` | `-d` | `0` | Milliseconds to wait between requests |
 | `--offset` | `-o` | `0` | Skip the first N data rows (useful for resuming after a failure) |
 | `--timeout` | `-T` | `30` | Per-request timeout in seconds |
 | `--retry-file` | `-r` | `<stem>_failed.csv` | Where to write rows that failed; auto-named from the CSV path if omitted |
-| `--content-type` | `-C` | `application/json` | `Content-Type` header for the request body |
 | `--verbose` | `-v` | false | Print URL, status, response body, and timing for every row |
 
 ## CSV format
@@ -95,15 +96,23 @@ id,reason
 1002,customer_request
 ```
 
-## Token
+## Auth
 
-Bearer token resolution order:
+Select the auth method with `--auth-type` / `-a`:
 
-1. `--token` / `-t` flag
-2. `BULK_TOKEN` environment variable
-3. Interactive prompt at startup
+### Bearer token (default)
+
+Resolution order: `--token` / `-t` flag → `BULK_TOKEN` env var → interactive prompt at startup.
 
 If the server returns **401** mid-run, the script pauses, prompts for a fresh token, and retries the failed row automatically. Tokens are Keycloak SSO tokens obtained from browser DevTools and cannot be fetched programmatically.
+
+### Basic auth
+
+Pass `--auth-type basic` (or `-a basic`). Credentials (`user:pass`) are resolved in the same order: `--user` / `-U` flag → `BULK_USER` env var → interactive prompt. On **401**, the script prompts for new credentials and retries.
+
+### No auth
+
+Pass `--auth-type none` (or `-a none`). No `Authorization` header is sent.
 
 ## Terminal UI
 

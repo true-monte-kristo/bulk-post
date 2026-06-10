@@ -163,6 +163,41 @@ class TestResolveToken(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# resolve_basic_creds
+# ---------------------------------------------------------------------------
+
+class TestResolveBasicCreds(unittest.TestCase):
+    def test_flag_value_returned_directly(self):
+        self.assertEqual(bulk_post.resolve_basic_creds("user:pass"), "user:pass")
+
+    def test_flag_overrides_env(self):
+        with patch.dict(os.environ, {"BULK_USER": "env:creds"}):
+            self.assertEqual(bulk_post.resolve_basic_creds("flag:creds"), "flag:creds")
+
+    def test_env_var_used_when_no_flag(self):
+        with patch.dict(os.environ, {"BULK_USER": "env:creds"}):
+            self.assertEqual(bulk_post.resolve_basic_creds(None), "env:creds")
+
+    def test_env_var_stripped(self):
+        with patch.dict(os.environ, {"BULK_USER": "  u:p  "}):
+            self.assertEqual(bulk_post.resolve_basic_creds(None), "u:p")
+
+    def test_interactive_prompt_when_no_flag_no_env(self):
+        with patch.dict(os.environ, {"BULK_USER": ""}), \
+             patch("builtins.input", return_value="typed:creds"):
+            creds = bulk_post.resolve_basic_creds(None)
+        self.assertEqual(creds, "typed:creds")
+
+    def test_empty_interactive_input_exits(self):
+        with patch.dict(os.environ, {"BULK_USER": ""}), \
+             patch("builtins.input", return_value=""), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post.resolve_basic_creds(None)
+        self.assertEqual(ctx.exception.code, 1)
+
+
+# ---------------------------------------------------------------------------
 # _validate_body_template
 # ---------------------------------------------------------------------------
 
@@ -295,14 +330,34 @@ class TestHttpRequest(unittest.TestCase):
                                    content_type="application/x-www-form-urlencoded")
         self.assertIsNone(captured[0].get_header("Content-type"))
 
-    def test_bearer_token_in_auth_header(self):
+    def test_auth_header_passed_through(self):
         captured = []
         def capture(req, timeout=None):
             captured.append(req)
             return self._mock_resp(200)
         with patch("urllib.request.urlopen", side_effect=capture):
-            bulk_post.http_request("http://x.com/", "my-secret", "GET", None)
+            bulk_post.http_request("http://x.com/", "Bearer my-secret", "GET", None)
         self.assertEqual(captured[0].get_header("Authorization"), "Bearer my-secret")
+
+    def test_basic_auth_header_passed_through(self):
+        import base64
+        creds = base64.b64encode(b"user:pass").decode()
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", f"Basic {creds}", "GET", None)
+        self.assertEqual(captured[0].get_header("Authorization"), f"Basic {creds}")
+
+    def test_none_auth_header_omits_authorization(self):
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", None, "GET", None)
+        self.assertIsNone(captured[0].get_header("Authorization"))
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +389,7 @@ class TestRun(unittest.TestCase):
         return m
 
     def _argv(self, url, csv_path, *extra_flags):
-        args = ["bp", "-u", url, "-c", csv_path, "-t", "tok"]
+        args = ["bp", "-u", url, "-c", csv_path, "-a", "bearer", "-t", "tok"]
         args += list(extra_flags)
         return args
 
@@ -522,6 +577,66 @@ class TestRun(unittest.TestCase):
             bulk_post._run()
 
         self.assertEqual(captured[0].get_header("Content-type"), "application/json")
+
+
+    def test_basic_auth_header_sent(self):
+        import base64
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "basic", "-U", "alice:s3cret"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        expected = "Basic " + base64.b64encode(b"alice:s3cret").decode()
+        self.assertEqual(captured[0].get_header("Authorization"), expected)
+
+    def test_no_auth_sends_no_authorization_header(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path, "-a", "none"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertIsNone(captured[0].get_header("Authorization"))
+
+    def test_401_retries_with_new_basic_creds(self):
+        import base64
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        err_401 = urllib.error.HTTPError("http://t.com/1", 401, "Unauthorized", {}, BytesIO(b""))
+        auth_headers = []
+
+        def capture(req, timeout=None):
+            auth_headers.append(req.get_header("Authorization"))
+            if len(auth_headers) == 1:
+                raise err_401
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "basic", "-U", "old:pass"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("bulk_post.prompt_new_basic_creds", return_value="new:pass"), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(len(auth_headers), 2)
+        self.assertEqual(auth_headers[0], "Basic " + base64.b64encode(b"old:pass").decode())
+        self.assertEqual(auth_headers[1], "Basic " + base64.b64encode(b"new:pass").decode())
 
 
 if __name__ == "__main__":

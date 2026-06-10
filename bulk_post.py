@@ -23,6 +23,7 @@ Failed rows are logged and skipped; execution always continues.
 """
 
 import argparse
+import base64
 import contextlib
 import csv
 import datetime
@@ -390,6 +391,63 @@ def prompt_new_token(
     return token
 
 
+def resolve_basic_creds(
+    flag_value: Optional[str],
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
+) -> str:
+    if flag_value:
+        return flag_value
+    env = os.environ.get("BULK_USER", "").strip()
+    if env:
+        return env
+    if suspend:
+        suspend()
+    try:
+        creds = input("Basic auth credentials (user:pass): ").strip()
+    except EOFError:
+        creds = ""
+    if resume:
+        resume()
+    if not creds:
+        print("[ERROR] No credentials provided.", file=sys.stderr)
+        sys.exit(1)
+    return creds
+
+
+def prompt_new_basic_creds(
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
+) -> str:
+    if suspend:
+        suspend()
+    print("\n[AUTH]  Credentials rejected (401). Enter new credentials.")
+    try:
+        creds = input("Basic auth credentials (user:pass): ").strip()
+    except EOFError:
+        creds = ""
+    if resume:
+        resume()
+    if not creds:
+        print("[ERROR] No credentials provided — aborting.", file=sys.stderr)
+        sys.exit(1)
+    return creds
+
+
+def resolve_auth_header(
+    args: argparse.Namespace,
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
+) -> Optional[str]:
+    if args.auth_type == "none":
+        return None
+    if args.auth_type == "bearer":
+        token = resolve_token(args.token, suspend=suspend, resume=resume)
+        return f"Bearer {token}"
+    creds = resolve_basic_creds(args.user, suspend=suspend, resume=resume)
+    return f"Basic {base64.b64encode(creds.encode()).decode()}"
+
+
 def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
     missing = [p for p in PLACEHOLDER_RE.findall(template) if p not in row]
     if missing:
@@ -397,10 +455,12 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
     return PLACEHOLDER_RE.sub(lambda m: row[m.group(1)], template), None
 
 
-def http_request(url: str, token: str, method: str, body: Optional[str], timeout: int = 30, content_type: str = "application/json") -> Tuple[Optional[int], str, float]:
+def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30, content_type: str = "application/json") -> Tuple[Optional[int], str, float]:
     """Returns (status_or_None, response_body, elapsed_seconds)."""
     encoded_body = body.encode("utf-8") if body else None
-    headers = {"Authorization": f"Bearer {token}"}
+    headers: dict = {}
+    if auth_header:
+        headers["Authorization"] = auth_header
     if encoded_body:
         headers["Content-Type"] = content_type
     req = urllib.request.Request(url, data=encoded_body, method=method, headers=headers)
@@ -521,13 +581,13 @@ def _validate_body_template(template: str, content_type: str) -> Optional[str]:
 def _fire(
     row: dict,
     args,
-    token: str,
+    auth_header: Optional[str],
     suspend: Optional[Callable],
     resume: Optional[Callable],
 ) -> Tuple[Optional[int], str, float, str, Optional[str]]:
     """
     Substitute placeholders, fire the request (with one 401 retry), return
-    (status, response_body, elapsed, final_url, new_token_or_None).
+    (status, response_body, elapsed, final_url, new_auth_header_or_None).
     Returns (None, err_message, 0, "", None) on substitution error.
     """
     url, err = substitute(args.url, row)
@@ -542,15 +602,19 @@ def _fire(
         ct = args.content_type
     else:
         ct = "application/json"
-    status, body, elapsed = http_request(url, token, args.method, req_body, args.timeout, ct)
+    status, body, elapsed = http_request(url, auth_header, args.method, req_body, args.timeout, ct)
 
-    new_token: Optional[str] = None
-    if status == 401:
-        refreshed = prompt_new_token(suspend=suspend, resume=resume)
-        status, body, elapsed = http_request(url, refreshed, args.method, req_body, args.timeout, ct)
-        new_token = refreshed
+    new_auth_header: Optional[str] = None
+    if status == 401 and args.auth_type != "none":
+        if args.auth_type == "bearer":
+            refreshed = prompt_new_token(suspend=suspend, resume=resume)
+            new_auth_header = f"Bearer {refreshed}"
+        else:
+            refreshed = prompt_new_basic_creds(suspend=suspend, resume=resume)
+            new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
+        status, body, elapsed = http_request(url, new_auth_header, args.method, req_body, args.timeout, ct)
 
-    return status, body, elapsed, url, new_token
+    return status, body, elapsed, url, new_auth_header
 
 
 def _log_row(
@@ -639,7 +703,7 @@ def _poll_cmd(bar: Optional[_BottomBar]) -> Optional[str]:
 def _run_loop(
     reader: csv.DictReader,
     args: argparse.Namespace,
-    token: str,
+    auth_header: Optional[str],
     bar: Optional[_BottomBar],
     suspend: Optional[Callable],
     resume: Optional[Callable],
@@ -653,9 +717,9 @@ def _run_loop(
     for line_num, row in enumerate(reader, start=offset + 2):
         processed += 1
         absolute = offset + processed
-        status, body, elapsed, url, new_token = _fire(row, args, token, suspend, resume)
-        if new_token:
-            token = new_token
+        status, body, elapsed, url, new_auth_header = _fire(row, args, auth_header, suspend, resume)
+        if new_auth_header:
+            auth_header = new_auth_header
         if status is None and not url:
             failed += 1
             retry_writer.writerow(row)
@@ -696,7 +760,10 @@ def main() -> None:
 def _run() -> None:
     parser = argparse.ArgumentParser(description="Bulk HTTP requests from CSV rows")
     parser.add_argument("--url", "-u", required=True, help="Target URL, may contain {{variable}} placeholders")
-    parser.add_argument("--token", "-t", default=None, help="Bearer token (overrides BULK_TOKEN env var)")
+    parser.add_argument("--auth-type", "-a", default="none", choices=["bearer", "basic", "none"],
+                        dest="auth_type", help="Auth method: bearer (default), basic, or none")
+    parser.add_argument("--token", "-t", default=None, help="Bearer token (overrides BULK_TOKEN env var); used with --auth-type bearer")
+    parser.add_argument("--user", "-U", default=None, help="Basic auth credentials as user:pass (overrides BULK_USER env var); used with --auth-type basic")
     parser.add_argument("--csv", "-c", required=True, dest="csv_path", help="Path to CSV file")
     parser.add_argument("--method", "-m", default="POST", help="HTTP method (default: POST)")
     parser.add_argument("--body", "-b", default=None, help="Request body (e.g. JSON string)")
@@ -747,7 +814,7 @@ def _run() -> None:
 
     suspend = bar.pause if bar else None
     resume = bar.resume if bar else None
-    token = resolve_token(args.token, suspend=suspend, resume=resume)
+    auth_header = resolve_auth_header(args, suspend=suspend, resume=resume)
 
     try:
         with csv_file:
@@ -756,7 +823,7 @@ def _run() -> None:
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
             log_file = _open_log_file(log_path)
             try:
-                ok, failed = _run_loop(reader, args, token, bar, suspend, resume, retry_writer, log_file, offset, total_rows)
+                ok, failed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset, total_rows)
             finally:
                 retry_file.close()
                 log_file.close()
