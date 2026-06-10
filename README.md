@@ -85,6 +85,8 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 | `--timeout` | `-T` | `30` | Per-request timeout in seconds |
 | `--retry-file` | `-r` | `<stem>_failed.csv` | Where to write rows that failed; auto-named from the CSV path if omitted |
 | `--verbose` | `-v` | false | Print URL, request/response headers (Authorization masked), body, status, and timing for every row |
+| `--parallel` | `-p` | false | Process rows concurrently using multiple threads; `--delay` is ignored in this mode |
+| `--concurrency-level` | `-n` | CPU count | Number of worker threads; only used with `--parallel` |
 
 ## CSV format
 

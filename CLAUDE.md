@@ -34,6 +34,8 @@ No external dependencies — stdlib `unittest` only.
 | `--timeout` | `-T` | 30 | request timeout in seconds |
 | `--retry-file` | `-r` | `<stem>_failed.csv` | path for failed-rows CSV |
 | `--verbose` | `-v` | false | print req/resp headers (Authorization masked), body, status, timing per row |
+| `--parallel` | `-p` | false | run rows concurrently using multiple threads; `--delay` ignored |
+| `--concurrency-level` | `-n` | CPU count | worker thread count; only used with `--parallel` |
 
 ## Auth design
 

@@ -641,5 +641,108 @@ class TestRun(unittest.TestCase):
         self.assertEqual(auth_headers[1], "Basic " + base64.b64encode(b"new:pass").decode())
 
 
+# ---------------------------------------------------------------------------
+# --parallel integration tests
+# ---------------------------------------------------------------------------
+
+class TestParallelRun(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_csv(self, filename, rows):
+        path = os.path.join(self.tmpdir, filename)
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
+
+    def _mock_resp(self, status, body=b""):
+        m = MagicMock()
+        m.status = status
+        m.read.return_value = body
+        m.headers = {}
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        return m
+
+    def test_parallel_all_succeed_no_retry_file(self):
+        rows = [{"id": str(i)} for i in range(1, 11)]
+        csv_path = self._write_csv("data.csv", rows)
+        retry_path = Path(csv_path).parent / "data_failed.csv"
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "3"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertFalse(retry_path.exists())
+
+    def test_parallel_failed_rows_written(self):
+        rows = [{"id": str(i)} for i in range(1, 4)]
+        csv_path = self._write_csv("data.csv", rows)
+        retry_path = Path(csv_path).parent / "data_failed.csv"
+        err = urllib.error.HTTPError("http://t.com/1", 500, "Err", {}, BytesIO(b"boom"))
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "3"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=err), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertTrue(retry_path.exists())
+        with open(retry_path) as f:
+            written_rows = list(csv.DictReader(f))
+        self.assertEqual(len(written_rows), 3)
+
+    def test_parallel_401_prompt_new_token_called_once(self):
+        rows = [{"id": str(i)} for i in range(1, 6)]
+        csv_path = self._write_csv("data.csv", rows)
+
+        def mock_urlopen(req, timeout=None):
+            if req.get_header("Authorization") == "Bearer old-tok":
+                raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, BytesIO(b""))
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "bearer", "-t", "old-tok", "--parallel", "-n", "5"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=mock_urlopen), \
+             patch("bulk_post.prompt_new_token", return_value="new-tok") as mock_prompt, \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        mock_prompt.assert_called_once()
+
+    def test_parallel_respects_offset(self):
+        rows = [{"id": str(i)} for i in range(1, 11)]
+        csv_path = self._write_csv("data.csv", rows)
+        urls_called = []
+
+        def capture(req, timeout=None):
+            urls_called.append(req.full_url)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "3", "--offset", "5"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(len(urls_called), 5)
+        self.assertNotIn("http://t.com/1", urls_called)
+        self.assertIn("http://t.com/10", urls_called)
+
+
 if __name__ == "__main__":
     unittest.main()
