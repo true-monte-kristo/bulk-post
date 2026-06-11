@@ -71,6 +71,8 @@ _CMD_RESUME = "/resume"
 _CMD_EXIT = "/exit"
 _COMMANDS = [_CMD_PAUSE, _CMD_RESUME, _CMD_EXIT]
 
+_QUEUE_MAXSIZE = 500  # max rows buffered in memory in parallel mode
+
 
 def _get_suggestion(buf: str) -> str:
     """Return the completion suffix for buf if it uniquely matches a command."""
@@ -884,9 +886,13 @@ def _parallel_worker(
             break
         state.pause_event.wait()
         try:
-            line_num, row = work_queue.get(timeout=0.1)
+            item = work_queue.get(timeout=0.1)
         except queue.Empty:
+            continue
+        if item is None:  # poison pill — no more rows
+            work_queue.task_done()
             break
+        line_num, row = item
 
         with state.lock:
             auth_header = state.auth_header
@@ -939,17 +945,36 @@ def _run_parallel(
         offset: int,
         total_rows: int,
 ) -> Tuple[int, int, int]:
-    work_queue: queue.Queue = queue.Queue()
-    for line_num, row in enumerate(reader, start=offset + 1):
-        work_queue.put((line_num, row))
-
-    if work_queue.empty():
+    effective_rows = total_rows - offset
+    if effective_rows <= 0:
         return 0, 0, 0
 
+    work_queue: queue.Queue = queue.Queue(maxsize=_QUEUE_MAXSIZE)
     state = _ParallelState(auth_header)
     auth_refresh_fn = _make_auth_refresh_fn(args, state, suspend, resume)
-    n_workers = min(args.concurrency_level, work_queue.qsize())
+    n_workers = min(args.concurrency_level, effective_rows)
     debug = getattr(args, 'debug', False)
+
+    def _producer() -> None:
+        for line_num, row in enumerate(reader, start=offset + 1):
+            while not state.stop_event.is_set():
+                try:
+                    work_queue.put((line_num, row), timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+            if state.stop_event.is_set():
+                break
+        # one poison pill per worker so every thread exits cleanly
+        for _ in range(n_workers):
+            while not state.stop_event.is_set():
+                try:
+                    work_queue.put(None, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+
+    producer_thread = threading.Thread(target=_producer, daemon=True, name="producer")
 
     threads = [
         threading.Thread(
@@ -960,6 +985,7 @@ def _run_parallel(
         )
         for i in range(n_workers)
     ]
+    producer_thread.start()
     for t in threads:
         t.start()
 
@@ -996,6 +1022,7 @@ def _run_parallel(
                         print(dbg, file=sys.stderr)
             time.sleep(0.05)
     finally:
+        producer_thread.join()
         for t in threads:
             t.join()
 
