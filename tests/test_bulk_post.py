@@ -360,6 +360,28 @@ class TestHttpRequest(unittest.TestCase):
             bulk_post.http_request("http://x.com/", None, "GET", None)
         self.assertIsNone(captured[0].get_header("Authorization"))
 
+    def test_extra_headers_sent(self):
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", None, "GET", None,
+                                   extra_headers={"X-Tenant": "acme", "X-Request-Id": "42"})
+        self.assertEqual(captured[0].get_header("X-tenant"), "acme")
+        self.assertEqual(captured[0].get_header("X-request-id"), "42")
+
+    def test_auth_overrides_extra_header_with_same_name(self):
+        """auth_header should win if extra_headers contains Authorization."""
+        captured = []
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200)
+        with patch("urllib.request.urlopen", side_effect=capture):
+            bulk_post.http_request("http://x.com/", "Bearer real-token", "GET", None,
+                                   extra_headers={"Authorization": "Bearer wrong-token"})
+        self.assertEqual(captured[0].get_header("Authorization"), "Bearer real-token")
+
 
 # ---------------------------------------------------------------------------
 # _run integration tests
@@ -600,6 +622,90 @@ class TestRun(unittest.TestCase):
         expected = "Basic " + base64.b64encode(b"alice:s3cret").decode()
         self.assertEqual(captured[0].get_header("Authorization"), expected)
 
+    def test_custom_header_sent_on_every_request(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}, {"id": "2"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Tenant: acme"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(len(captured), 2)
+        for req in captured:
+            self.assertEqual(req.get_header("X-tenant"), "acme")
+
+    def test_custom_header_value_supports_placeholder(self):
+        csv_path = self._write_csv("data.csv", [{"id": "42", "tenant": "acme"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Tenant: {{tenant}}"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(captured[0].get_header("X-tenant"), "acme")
+
+    def test_multiple_custom_headers(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        captured = []
+
+        def capture(req, timeout=None):
+            captured.append(req)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Foo: bar", "-H", "X-Baz: qux"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(captured[0].get_header("X-foo"), "bar")
+        self.assertEqual(captured[0].get_header("X-baz"), "qux")
+
+    def test_bad_header_format_exits(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        calls = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "BadHeaderNoColon"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(calls, [])
+
+    def test_header_placeholder_missing_from_csv_exits(self):
+        csv_path = self._write_csv("data.csv", [{"id": "1"}])
+        calls = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "-H", "X-Tenant: {{tenant}}"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(calls, [])
+
     def test_no_auth_sends_no_authorization_header(self):
         csv_path = self._write_csv("data.csv", [{"id": "1"}])
         captured = []
@@ -639,6 +745,186 @@ class TestRun(unittest.TestCase):
         self.assertEqual(len(auth_headers), 2)
         self.assertEqual(auth_headers[0], "Basic " + base64.b64encode(b"old:pass").decode())
         self.assertEqual(auth_headers[1], "Basic " + base64.b64encode(b"new:pass").decode())
+
+
+# ---------------------------------------------------------------------------
+# --parallel integration tests
+# ---------------------------------------------------------------------------
+
+class TestParallelRun(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_csv(self, filename, rows):
+        path = os.path.join(self.tmpdir, filename)
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
+
+    def _mock_resp(self, status, body=b""):
+        m = MagicMock()
+        m.status = status
+        m.read.return_value = body
+        m.headers = {}
+        m.__enter__.return_value = m
+        m.__exit__.return_value = False
+        return m
+
+    def test_parallel_all_succeed_no_retry_file(self):
+        rows = [{"id": str(i)} for i in range(1, 11)]
+        csv_path = self._write_csv("data.csv", rows)
+        retry_path = Path(csv_path).parent / "data_failed.csv"
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "3"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertFalse(retry_path.exists())
+
+    def test_parallel_failed_rows_written(self):
+        rows = [{"id": str(i)} for i in range(1, 4)]
+        csv_path = self._write_csv("data.csv", rows)
+        retry_path = Path(csv_path).parent / "data_failed.csv"
+        err = urllib.error.HTTPError("http://t.com/1", 500, "Err", {}, BytesIO(b"boom"))
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "3"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=err), \
+             patch("builtins.print"), \
+             self.assertRaises(SystemExit) as ctx:
+            bulk_post._run()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertTrue(retry_path.exists())
+        with open(retry_path) as f:
+            written_rows = list(csv.DictReader(f))
+        self.assertEqual(len(written_rows), 3)
+
+    def test_parallel_401_prompt_new_token_called_once(self):
+        rows = [{"id": str(i)} for i in range(1, 6)]
+        csv_path = self._write_csv("data.csv", rows)
+
+        def mock_urlopen(req, timeout=None):
+            if req.get_header("Authorization") == "Bearer old-tok":
+                raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, BytesIO(b""))
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "bearer", "-t", "old-tok", "--parallel", "-n", "5"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=mock_urlopen), \
+             patch("bulk_post.prompt_new_token", return_value="new-tok") as mock_prompt, \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        mock_prompt.assert_called_once()
+
+    def test_parallel_respects_offset(self):
+        rows = [{"id": str(i)} for i in range(1, 11)]
+        csv_path = self._write_csv("data.csv", rows)
+        urls_called = []
+
+        def capture(req, timeout=None):
+            urls_called.append(req.full_url)
+            return self._mock_resp(200, b"ok")
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "3", "--offset", "5"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=capture), \
+             patch("builtins.print"):
+            bulk_post._run()
+
+        self.assertEqual(len(urls_called), 5)
+        self.assertNotIn("http://t.com/1", urls_called)
+        self.assertIn("http://t.com/10", urls_called)
+
+    def test_debug_flag_prefixes_thread_name_in_output(self):
+        rows = [{"id": str(i)} for i in range(1, 4)]
+        csv_path = self._write_csv("data.csv", rows)
+        printed = []
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--parallel", "-n", "2", "--debug"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: self._mock_resp(200, b"ok")), \
+             patch("builtins.print", side_effect=lambda *a, **kw: printed.append(str(a[0]) if a else "")):
+            bulk_post._run()
+
+        row_lines = [l for l in printed if "[OK]" in l]
+        self.assertTrue(row_lines, "expected at least one [OK] line")
+        self.assertTrue(
+            any("[worker-" in l for l in row_lines),
+            f"expected '[worker-N]' prefix in output; got: {row_lines}",
+        )
+
+    def test_parallel_exit_while_paused_does_not_hang(self):
+        """Regression: /exit while paused must unblock workers and complete."""
+        import threading as _threading
+        rows = [{"id": str(i)} for i in range(1, 20)]
+        csv_path = self._write_csv("data.csv", rows)
+
+        cmd_queue = []
+
+        def mock_poll(bar):
+            import time
+            time.sleep(0.05)
+            if not cmd_queue:
+                return None
+            return cmd_queue.pop(0)
+
+        # Slow requests so workers are still running when we send /pause then /exit
+        def slow_resp(req, timeout=None):
+            import time
+            time.sleep(0.02)
+            return self._mock_resp(200, b"ok")
+
+        result = {}
+
+        def run():
+            with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                     "-a", "none", "--parallel", "-n", "2"]), \
+                 patch("sys.stdin.isatty", return_value=False), \
+                 patch("urllib.request.urlopen", side_effect=slow_resp), \
+                 patch("bulk_post._poll_cmd", side_effect=mock_poll):
+                bulk_post._run()
+            result["done"] = True
+
+        t = _threading.Thread(target=run, daemon=True)
+        t.start()
+        import time
+        time.sleep(0.15)           # let some rows start
+        cmd_queue.append("/pause")
+        time.sleep(0.1)            # let pause take effect
+        cmd_queue.append("/exit")
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "script hung after /exit while paused")
+        self.assertTrue(result.get("done"), "script did not complete cleanly")
+
+    def test_debug_without_parallel_prints_info(self):
+        import io
+        rows = [{"id": "1"}]
+        csv_path = self._write_csv("data.csv", rows)
+        stderr_buf = io.StringIO()
+
+        with patch("sys.argv", ["bp", "-u", "http://t.com/{{id}}", "-c", csv_path,
+                                 "-a", "none", "--debug"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: self._mock_resp(200, b"ok")), \
+             patch("sys.stderr", stderr_buf):
+            bulk_post._run()
+
+        self.assertIn("--debug has no effect without --parallel", stderr_buf.getvalue())
 
 
 if __name__ == "__main__":

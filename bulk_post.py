@@ -71,6 +71,8 @@ _CMD_RESUME = "/resume"
 _CMD_EXIT = "/exit"
 _COMMANDS = [_CMD_PAUSE, _CMD_RESUME, _CMD_EXIT]
 
+_QUEUE_MAXSIZE = 500  # max rows buffered in memory in parallel mode
+
 
 def _get_suggestion(buf: str) -> str:
     """Return the completion suffix for buf if it uniquely matches a command."""
@@ -96,13 +98,15 @@ class _BottomBar:
     Only used when sys.stdin.isatty() and termios is available.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, debug_mode: bool = False) -> None:
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._buf = ""
         self._nav_idx: int = -1  # -1 = free input; 0..len(_COMMANDS)-1 = navigating
         self._saved_buf: str = ""  # buffer snapshot taken when entering navigation
         self._h = 0
+        self._scroll_end = 0  # last row of scroll region; set in start()
+        self._debug_mode = debug_mode
         self._active = False
         self._thread: Optional[threading.Thread] = None
         self._old_settings = None
@@ -115,14 +119,14 @@ class _BottomBar:
     def start(self) -> bool:
         import shutil
         self._h = shutil.get_terminal_size((80, 24)).lines
-        if self._h < 5:
+        if self._h < (6 if self._debug_mode else 5):
             return False
         try:
             self._old_settings = termios.tcgetattr(sys.stdin.fileno())
         except termios.error:
             return False
-        # Set scroll region (rows 1..h-2) and draw the command prompt
-        sys.stdout.write(f"\033[1;{self._h - 2}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}")
+        self._scroll_end = self._h - (3 if self._debug_mode else 2)
+        sys.stdout.write(f"\033[1;{self._scroll_end}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}")
         sys.stdout.flush()
         self._active = True
         self._thread = threading.Thread(target=self._input_loop, daemon=True)
@@ -139,7 +143,11 @@ class _BottomBar:
             except termios.error:
                 pass
         # Reset scroll region and clear bottom rows
-        sys.stdout.write(f"\033[r\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K")
+        if self._debug_mode:
+            clear = f"\033[r\033[{self._h - 2};1H\033[2K\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K"
+        else:
+            clear = f"\033[r\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K"
+        sys.stdout.write(clear)
         sys.stdout.flush()
 
     def pause(self) -> None:
@@ -149,7 +157,7 @@ class _BottomBar:
         # Wait for the input thread to acknowledge it has left raw mode.
         self._paused_ack.wait(timeout=0.5)
         # Place cursor at the bottom of the scroll region for interactive prompts
-        sys.stdout.write(f"\033[{self._h - 2};1H\n\r")
+        sys.stdout.write(f"\033[{self._scroll_end};1H\n\r")
         sys.stdout.flush()
 
     def resume(self) -> None:
@@ -175,7 +183,7 @@ class _BottomBar:
             buf = self._buf
         # Move to last scrollable row → \n scrolls the region up → print on fresh row
         sys.stdout.write(
-            f"\033[{self._h - 2};1H\n\r{text}{_RESET}\033[K"
+            f"\033[{self._scroll_end};1H\n\r{text}{_RESET}\033[K"
             f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
         )
         sys.stdout.flush()
@@ -189,6 +197,17 @@ class _BottomBar:
             buf = self._buf
         sys.stdout.write(
             f"\033[{self._h - 1};1H\033[2K{line}"
+            f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
+        )
+        sys.stdout.flush()
+
+    def update_debug(self, text: str) -> None:
+        if not self._debug_mode:
+            return
+        with self._lock:
+            buf = self._buf
+        sys.stdout.write(
+            f"\033[{self._h - 2};1H\033[2K{_GREY}{text}{_RESET}"
             f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
         )
         sys.stdout.flush()
@@ -313,6 +332,26 @@ class _BottomBar:
             f"\033[{self._h};{cursor_col}H"
         )
         sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# Parallel execution state
+# ---------------------------------------------------------------------------
+
+class _ParallelState:
+    """Shared mutable state for parallel worker threads."""
+
+    def __init__(self, auth_header: Optional[str]) -> None:
+        self.lock = threading.Lock()         # protects counters, retry_writer, log_file
+        self.auth_lock = threading.Lock()    # serialises 401 interactive prompts
+        self.output_lock = threading.Lock()  # serialises all stdout / bar writes
+        self.auth_header: Optional[str] = auth_header
+        self.ok = 0
+        self.failed = 0
+        self.processed = 0
+        self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.pause_event.set()               # set = running; clear = paused
 
 
 # ---------------------------------------------------------------------------
@@ -457,10 +496,13 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
 
 
 def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30,
-                 content_type: str = "application/json") -> Tuple[Optional[int], str, float, dict, dict]:
+                 content_type: str = "application/json",
+                 extra_headers: Optional[dict] = None) -> Tuple[Optional[int], str, float, dict, dict]:
     """Returns (status_or_None, response_body, elapsed_seconds, req_headers, resp_headers)."""
     encoded_body = body.encode("utf-8") if body else None
     req_headers: dict = {}
+    if extra_headers:
+        req_headers.update(extra_headers)
     if auth_header:
         req_headers["Authorization"] = auth_header
     if encoded_body:
@@ -601,12 +643,43 @@ def _validate_body_template(template: str, content_type: str) -> Optional[str]:
     return None
 
 
+def _make_auth_refresh_fn(
+        args,
+        state: "_ParallelState",
+        suspend: Optional[Callable],
+        resume: Optional[Callable],
+) -> Callable:
+    """Return a thread-safe 401-refresh closure for parallel workers."""
+    def refresh(old_auth_header: Optional[str]) -> Optional[str]:
+        with state.auth_lock:
+            # Another thread already refreshed while we waited for the lock.
+            if state.auth_header != old_auth_header:
+                return state.auth_header
+            with state.output_lock:
+                if suspend:
+                    suspend()
+                try:
+                    if args.auth_type == "bearer":
+                        refreshed = prompt_new_token()
+                        new = f"Bearer {refreshed}"
+                    else:
+                        refreshed = prompt_new_basic_creds()
+                        new = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
+                finally:
+                    if resume:
+                        resume()
+            state.auth_header = new
+            return new
+    return refresh
+
+
 def _fire(
         row: dict,
         args,
         auth_header: Optional[str],
         suspend: Optional[Callable],
         resume: Optional[Callable],
+        auth_refresh_fn: Optional[Callable] = None,
 ) -> Tuple[Optional[int], str, float, str, Optional[str], Optional[str], dict, dict]:
     """
     Substitute placeholders, fire the request (with one 401 retry), return
@@ -625,17 +698,30 @@ def _fire(
         ct = args.content_type
     else:
         ct = "application/json"
-    status, body, elapsed, req_headers, resp_headers = http_request(url, auth_header, args.method, req_body, args.timeout, ct)
+
+    extra_headers: dict = {}
+    for raw in (args.header or []):
+        name, _, val_tmpl = raw.partition(": ")
+        val, herr = substitute(val_tmpl, row)
+        if herr:
+            return None, herr, 0.0, url, None, None, {}, {}
+        extra_headers[name] = val
+
+    status, body, elapsed, req_headers, resp_headers = http_request(
+        url, auth_header, args.method, req_body, args.timeout, ct, extra_headers)
 
     new_auth_header: Optional[str] = None
     if status == 401 and args.auth_type != "none":
-        if args.auth_type == "bearer":
+        if auth_refresh_fn is not None:
+            new_auth_header = auth_refresh_fn(auth_header)
+        elif args.auth_type == "bearer":
             refreshed = prompt_new_token(suspend=suspend, resume=resume)
             new_auth_header = f"Bearer {refreshed}"
         else:
             refreshed = prompt_new_basic_creds(suspend=suspend, resume=resume)
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
-        status, body, elapsed, req_headers, resp_headers = http_request(url, new_auth_header, args.method, req_body, args.timeout, ct)
+        status, body, elapsed, req_headers, resp_headers = http_request(
+            url, new_auth_header, args.method, req_body, args.timeout, ct, extra_headers)
 
     return status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers
 
@@ -651,6 +737,7 @@ def _log_row(
         req_body: Optional[str],
         req_headers: dict,
         resp_headers: dict,
+        thread_tag: str = "",
 ) -> bool:
     """Print per-row output. Returns True if the row succeeded."""
     method = args.method
@@ -659,18 +746,30 @@ def _log_row(
 
     if status is not None and 200 <= status < 300:
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-        _out(bar, f"{_GREEN}[OK]    row {line_num}: {status} {url}{elapsed_str}{_RESET}")
+        _out(bar, f"{_GREEN}{thread_tag}[OK]    row {line_num}: {status} {url}{elapsed_str}{_RESET}")
         return True
     else:
         short_body = body[:200].replace("\n", " ")
         status_str = str(status) if status is not None else "ERR"
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-        _out(bar, f"{_RED}[FAIL]  row {line_num}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
+        _out(bar, f"{_RED}{thread_tag}[FAIL]  row {line_num}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
         return False
 
 
 def _validate_placeholders(args: argparse.Namespace, fieldnames: Optional[list]) -> None:
-    all_placeholders = PLACEHOLDER_RE.findall(args.url) + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
+    header_val_placeholders: list = []
+    for raw in (args.header or []):
+        if ": " not in raw:
+            print(f"[ERROR] --header value must be in 'Name: value' format, got: {raw!r}", file=sys.stderr)
+            sys.exit(1)
+        _, _, val_tmpl = raw.partition(": ")
+        header_val_placeholders += PLACEHOLDER_RE.findall(val_tmpl)
+
+    all_placeholders = (
+        PLACEHOLDER_RE.findall(args.url)
+        + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
+        + header_val_placeholders
+    )
     if not all_placeholders:
         return
     missing = [p for p in all_placeholders if p not in (fieldnames or [])]
@@ -768,6 +867,168 @@ def _run_loop(
     return ok, failed, processed
 
 
+def _parallel_worker(
+        work_queue: "queue.Queue[Tuple[int, dict]]",
+        args: argparse.Namespace,
+        state: _ParallelState,
+        bar: Optional[_BottomBar],
+        suspend: Optional[Callable],
+        resume: Optional[Callable],
+        retry_writer: Any,
+        log_file: "IO[str]",
+        total_rows: int,
+        auth_refresh_fn: Callable,
+        debug: bool = False,
+) -> None:
+    thread_tag = f"[{threading.current_thread().name}] " if debug else ""
+    while True:
+        if state.stop_event.is_set():
+            break
+        state.pause_event.wait()
+        try:
+            item = work_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if item is None:  # poison pill — no more rows
+            work_queue.task_done()
+            break
+        line_num, row = item
+
+        with state.lock:
+            auth_header = state.auth_header
+
+        status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers = _fire(
+            row, args, auth_header, suspend=None, resume=None, auth_refresh_fn=auth_refresh_fn,
+        )
+
+        if new_auth_header:
+            with state.lock:
+                state.auth_header = new_auth_header
+
+        with state.lock:
+            state.processed += 1
+            absolute = state.processed
+
+        if status is None and not url:
+            with state.output_lock:
+                _out(bar, f"{_RED}{thread_tag}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
+                _progress(bar, absolute, total_rows)
+            with state.lock:
+                state.failed += 1
+                retry_writer.writerow(row)
+                _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, {}, None, body, {}, 0.0)
+        else:
+            with state.output_lock:
+                succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body, req_headers,
+                                     resp_headers, thread_tag=thread_tag)
+                _progress(bar, absolute, total_rows)
+            with state.lock:
+                if succeeded:
+                    state.ok += 1
+                else:
+                    state.failed += 1
+                    retry_writer.writerow(row)
+                    _write_failure_log(log_file, "FAIL", line_num, args.method, url, req_body, req_headers, status, body, resp_headers, elapsed)
+
+        work_queue.task_done()
+
+
+def _run_parallel(
+        reader: csv.DictReader,
+        args: argparse.Namespace,
+        auth_header: Optional[str],
+        bar: Optional[_BottomBar],
+        suspend: Optional[Callable],
+        resume: Optional[Callable],
+        retry_writer: Any,
+        log_file: "IO[str]",
+        offset: int,
+        total_rows: int,
+) -> Tuple[int, int, int]:
+    effective_rows = total_rows - offset
+    if effective_rows <= 0:
+        return 0, 0, 0
+
+    work_queue: queue.Queue = queue.Queue(maxsize=_QUEUE_MAXSIZE)
+    state = _ParallelState(auth_header)
+    auth_refresh_fn = _make_auth_refresh_fn(args, state, suspend, resume)
+    n_workers = min(args.concurrency_level, effective_rows)
+    debug = getattr(args, 'debug', False)
+
+    def _producer() -> None:
+        for line_num, row in enumerate(reader, start=offset + 1):
+            while not state.stop_event.is_set():
+                try:
+                    work_queue.put((line_num, row), timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+            if state.stop_event.is_set():
+                break
+        # one poison pill per worker so every thread exits cleanly
+        for _ in range(n_workers):
+            while not state.stop_event.is_set():
+                try:
+                    work_queue.put(None, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+
+    producer_thread = threading.Thread(target=_producer, daemon=True, name="producer")
+
+    threads = [
+        threading.Thread(
+            target=_parallel_worker,
+            name=f"worker-{i + 1}",
+            args=(work_queue, args, state, bar, suspend, resume, retry_writer, log_file, total_rows, auth_refresh_fn, debug),
+            daemon=True,
+        )
+        for i in range(n_workers)
+    ]
+    producer_thread.start()
+    for t in threads:
+        t.start()
+
+    _debug_ts = 0.0
+    try:
+        while any(t.is_alive() for t in threads):
+            cmd = _poll_cmd(bar)
+            if cmd == _CMD_EXIT:
+                state.stop_event.set()
+                state.pause_event.set()  # unblock workers stuck in pause_event.wait()
+                with state.output_lock:
+                    _out(bar, f"{_GREY}[EXIT]  Stopping after current requests finish.{_RESET}")
+                break
+            elif cmd == _CMD_PAUSE:
+                state.pause_event.clear()
+                with state.output_lock:
+                    _out(bar, "[PAUSED]  Type /resume to continue...")
+            elif cmd == _CMD_RESUME:
+                state.pause_event.set()
+                with state.output_lock:
+                    _out(bar, "[RESUMED]")
+            if debug:
+                now = time.monotonic()
+                if now - _debug_ts >= 0.5:
+                    _debug_ts = now
+                    n_active = sum(t.is_alive() for t in threads)
+                    pending = work_queue.qsize()
+                    with state.lock:
+                        ok_n, fail_n = state.ok, state.failed
+                    dbg = f"  [debug]  Q: {pending} pending  |  threads: {n_active}/{len(threads)}  |  ok: {ok_n}  fail: {fail_n}"
+                    if bar:
+                        bar.update_debug(dbg)
+                    else:
+                        print(dbg, file=sys.stderr)
+            time.sleep(0.05)
+    finally:
+        producer_thread.join()
+        for t in threads:
+            t.join()
+
+    return state.ok, state.failed, state.processed
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -801,6 +1062,15 @@ def _run() -> None:
     parser.add_argument("--timeout", "-T", type=int, default=30, help="Request timeout in seconds (default: 30)")
     parser.add_argument("--retry-file", "-r", default=None, dest="retry_file",
                         help="Path for failed-rows CSV (default: <input_stem>_failed.csv)")
+    parser.add_argument("--parallel", "-p", action="store_true", default=False,
+                        help="Process rows in parallel using multiple threads")
+    parser.add_argument("--concurrency-level", "-n", type=int, default=os.cpu_count() or 4,
+                        dest="concurrency_level",
+                        help=f"Number of parallel worker threads (default: {os.cpu_count() or 4}); only used with --parallel")
+    parser.add_argument("--header", "-H", action="append", default=None, metavar="NAME: VALUE",
+                        help="Add a custom request header; repeatable. Value supports {{col}} placeholders.")
+    parser.add_argument("--debug", "-D", action="store_true", default=False,
+                        help="Print diagnostic info per row (thread name, queue depth); only meaningful with --parallel")
     args = parser.parse_args()
     args.method = args.method.upper()
 
@@ -833,9 +1103,15 @@ def _run() -> None:
         print(f"[ERROR] Cannot open CSV file: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if args.parallel and args.delay > 0:
+        print("[INFO] --delay is ignored in parallel mode.", file=sys.stderr)
+
+    if args.debug and not args.parallel:
+        print("[INFO] --debug has no effect without --parallel.", file=sys.stderr)
+
     bar: Optional[_BottomBar] = None
     if sys.stdin.isatty() and _HAS_TERMIOS:
-        b = _BottomBar()
+        b = _BottomBar(debug_mode=args.debug and args.parallel)
         if b.start():
             bar = b
 
@@ -850,8 +1126,14 @@ def _run() -> None:
             retry_file, retry_writer = _open_retry_writer(retry_path, fieldnames)
             log_file = _open_log_file(log_path)
             try:
-                ok, failed, processed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset,
-                                                  total_rows)
+                if args.parallel:
+                    ok, failed, processed = _run_parallel(
+                        reader, args, auth_header, bar, suspend, resume,
+                        retry_writer, log_file, offset, total_rows,
+                    )
+                else:
+                    ok, failed, processed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset,
+                                                      total_rows)
             finally:
                 retry_file.close()
                 log_file.close()

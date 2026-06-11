@@ -34,6 +34,10 @@ No external dependencies — stdlib `unittest` only.
 | `--timeout` | `-T` | 30 | request timeout in seconds |
 | `--retry-file` | `-r` | `<stem>_failed.csv` | path for failed-rows CSV |
 | `--verbose` | `-v` | false | print req/resp headers (Authorization masked), body, status, timing per row |
+| `--header` | `-H` | — | Add a custom request header as `Name: value`; repeatable. Values support `{{col}}` placeholders. |
+| `--parallel` | `-p` | false | run rows concurrently using multiple threads; `--delay` ignored |
+| `--concurrency-level` | `-n` | CPU count | worker thread count; only used with `--parallel` |
+| `--debug` | `-D` | false | print thread name on each row and show a live debug bar (queue depth, active threads, ok/fail counts); only meaningful with `--parallel` |
 
 ## Auth design
 
@@ -47,7 +51,7 @@ Tokens/credentials are Keycloak SSO values obtained from browser DevTools and ca
 
 ## Terminal UI
 
-When running in a real TTY (`termios` available), `_BottomBar` reserves the bottom two rows via an ANSI scroll region: a live progress bar on row `h-1` and a command input on row `h`. Commands: `/pause`, `/resume`, `/exit` (Tab for autocomplete). In non-TTY mode (pipes, tests) the bar is skipped entirely.
+When running in a real TTY (`termios` available), `_BottomBar` reserves the bottom two rows via an ANSI scroll region: a live progress bar on row `h-1` and a command input on row `h`. With `--debug --parallel`, a third reserved row `h-2` shows live queue depth, active thread count, and ok/fail counters (updated every 0.5 s). In non-TTY debug mode the same stats are printed to stderr. Commands: `/pause`, `/resume`, `/exit` (Tab for autocomplete). In non-TTY mode (pipes, tests) the bar is skipped entirely.
 
 ## Public API surface (for tests)
 
