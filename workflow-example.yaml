@@ -1,0 +1,51 @@
+workflow:
+  description: Execute A, B and delete from C
+  # group of logically colocated  api endpoints sharing same credentials.
+  groupA:
+    auth:
+      type: bearer
+      # optional, can be prompted later
+      token: some_token
+    endpoints:
+      #  user chosen (dashed) name for an api endpoint
+      - call-example-api:
+          url: https://example.com/api/{{placeholderA}}
+          #auth here overrides the parent group auth
+          auth:
+            type: bearer
+            # optional, can be prompted later
+            token: some_token
+          method: POST
+          on_error: stop
+          # optional headers
+          headers:
+            XX-Api-Version: v1
+            Content-Type: application/json
+          # optional body
+          body: '{ "param": "{{placeholderB}}"}'
+  groupB:
+    auth:
+      type: basic
+      user: user
+      password: password
+    endpoints:
+      - call-another-example-api:
+          url: https://another-example.com/another-api/{{placeholderA}}
+          auth:
+            type: basic
+            user: user
+            password: password
+          method: PUT
+          on_error: stop
+          headers:
+            XX-Api-Version: v3
+            Content-Type: application/json
+          body: '{ "somethingElse": "{{placeholderB}}"}'
+
+  #example of a no-auth endpoint
+  groupC:
+    endpoints:
+      - call-another-example-api:
+          url: https://yet-another-example.com/yet-another-api/{{placeholderA}}
+          method: DELETE
+          on_error: stop

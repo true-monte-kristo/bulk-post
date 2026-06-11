@@ -1,0 +1,22 @@
+workflow:
+  description: Execute A, B
+  groupA:
+    auth:
+      type: bearer
+      token: some_token
+    endpoints:
+      - 1-st-call:
+          url: https://jsonplaceholder.typicode.com/posts
+          method: POST
+          on_error: stop
+          body: '{ "param": "{{invoice_id}}"}'
+  groupB:
+    endpoints:
+      - call-another-example-api:
+          url: https://jsonplaceholder.typicode.com/posts
+          method: POST
+          on_error: stop
+          headers:
+            XX-Api-Version: v3
+            Content-Type: application/json
+          body: '{ "somethingElse": "{{invoice_id}}"}'

@@ -5,7 +5,7 @@ A zero-dependency Python CLI that reads a CSV file and fires one HTTP request pe
 ## Requirements
 
 - Python 3.12+
-- No external packages — stdlib only
+- [PyYAML](https://pypi.org/project/PyYAML/) — required only for `--workflow` mode
 
 ## Installation
 
@@ -89,6 +89,7 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 | `--parallel` | `-p` | false | Process rows concurrently using multiple threads; `--delay` is ignored in this mode |
 | `--concurrency-level` | `-n` | CPU count | Number of worker threads; only used with `--parallel` |
 | `--debug` | `-D` | false | Print worker thread name on each row log line and show a live debug bar with queue depth, active thread count, and ok/fail counters; only meaningful with `--parallel` |
+| `--workflow` | `-w` | — | Path to a workflow YAML file; mutually exclusive with `--url` |
 
 ## CSV format
 
@@ -140,6 +141,69 @@ In non-TTY mode (piped input, CI, test environments) the bottom bar is skipped a
 Rows that fail (network error, non-2xx response, or substitution error) are written to the retry file. By default this is `<csv-stem>_failed.csv` next to the input file. Re-run with `-c <stem>_failed.csv` to retry only those rows.
 
 If no rows fail, the retry file is deleted automatically.
+
+## Workflow mode
+
+Instead of a single `--url` template, you can define a multi-step workflow in a YAML file and run it with `--workflow` / `-w`.
+
+Each CSV row fires all steps in document order. Steps within a row are always sequential; `--parallel` controls per-row concurrency across rows.
+
+### Workflow YAML format
+
+```yaml
+workflow:
+  description: Optional human-readable description  # skipped at runtime
+
+  groupA:                          # logical grouping for shared auth
+    auth:
+      type: bearer                 # bearer | basic | none
+      token: some_token            # optional — prompted if omitted
+    endpoints:
+      - step-name:                 # user-chosen name; unique within the group
+          url: https://api.example.com/{{id}}
+          method: POST             # default POST
+          headers:
+            Content-Type: application/json
+            X-Custom: value
+          body: '{"key": "{{col}}"}'
+          on_error: stop           # stop (default) | continue
+          auth:                    # step-level auth overrides group auth
+            type: bearer
+            token: override_token
+
+  groupB:
+    auth:
+      type: basic
+      user: alice
+      password: secret
+    endpoints:
+      - another-step:
+          url: https://other.example.com/{{id}}
+          method: DELETE
+
+  groupC:                          # no auth
+    endpoints:
+      - no-auth-step:
+          url: https://public.example.com/{{id}}
+          method: GET
+```
+
+Key rules:
+
+- **Execution order** — steps fire in the order they appear in the document (top to bottom across all groups).
+- **Group auth** — all steps in a group inherit the group's auth unless they declare their own.
+- **`on_error`** — `stop` (default) halts remaining steps for that row and writes it to the retry file; `continue` logs the failure, writes the row, and proceeds to the next step.
+- **Placeholders** — `{{col}}` in `url`, `body`, and header values is replaced with the matching CSV column value, same as in single-URL mode.
+
+### Retry and resume
+
+When a step fails, the row is written to the retry file with an extra column `_bulk_post_step` set to the path of the first failed step (e.g. `groupA/step-name`). Re-running with that retry CSV skips all steps before the failed one, resuming mid-workflow automatically.
+
+### Example
+
+```bash
+bulk-post -w workflow.yaml -c rows.csv
+```
 
 ## Running tests
 

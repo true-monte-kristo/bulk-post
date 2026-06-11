@@ -927,5 +927,420 @@ class TestParallelRun(unittest.TestCase):
         self.assertIn("--debug has no effect without --parallel", stderr_buf.getvalue())
 
 
+# ---------------------------------------------------------------------------
+# parse_workflow
+# ---------------------------------------------------------------------------
+
+class TestParseWorkflow(unittest.TestCase):
+
+    def _write_yaml(self, name, content):
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, prefix=name
+        )
+        tmp.write(content)
+        tmp.close()
+        return tmp.name
+
+    def tearDown(self):
+        pass  # tempfiles cleaned up per-test via addCleanup
+
+    def _yaml(self, name, content):
+        path = self._write_yaml(name, content)
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def test_nested_style_parses(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    auth:
+      type: bearer
+      token: tok123
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: POST
+          body: '{"x": "{{val}}"}'
+          headers:
+            Content-Type: application/json
+            X-Version: "1"
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        self.assertEqual(len(steps), 1)
+        s = steps[0]
+        self.assertEqual(s.path, "groupA/step-one")
+        self.assertEqual(s.url, "https://api.example.com/{{id}}")
+        self.assertEqual(s.method, "POST")
+        self.assertEqual(s.body, '{"x": "{{val}}"}')
+        self.assertEqual(s.content_type, "application/json")
+        self.assertNotIn("Content-Type", s.headers)
+        self.assertNotIn("content-type", s.headers)
+        self.assertEqual(s.headers.get("X-Version"), "1")
+        self.assertEqual(s.auth_type, "bearer")
+        self.assertEqual(s.auth_raw, "tok123")
+        self.assertEqual(s.on_error, "stop")
+
+    def test_group_auth_applied_to_steps(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    auth:
+      type: basic
+      user: alice
+      password: secret
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        s = steps[0]
+        self.assertEqual(s.auth_type, "basic")
+        self.assertEqual(s.auth_raw, "alice:secret")
+
+    def test_step_auth_overrides_group_auth(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    auth:
+      type: bearer
+      token: group_tok
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+          auth:
+            type: bearer
+            token: step_tok
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        self.assertEqual(steps[0].auth_raw, "step_tok")
+
+    def test_no_auth_group_defaults_to_none(self):
+        path = self._yaml("wf", """
+workflow:
+  groupC:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: DELETE
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        self.assertEqual(steps[0].auth_type, "none")
+        self.assertEqual(steps[0].auth_raw, "")
+
+    def test_on_error_continue(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: DELETE
+          on_error: continue
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        self.assertEqual(steps[0].on_error, "continue")
+
+    def test_content_type_extracted_from_headers(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: POST
+          headers:
+            Content-Type: text/plain
+            X-Foo: bar
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        s = steps[0]
+        self.assertEqual(s.content_type, "text/plain")
+        self.assertNotIn("Content-Type", s.headers)
+        self.assertEqual(s.headers.get("X-Foo"), "bar")
+
+    def test_document_order_preserved(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://a.example.com/{{id}}
+          method: GET
+      - step-two:
+          url: https://b.example.com/{{id}}
+          method: POST
+  groupB:
+    endpoints:
+      - step-three:
+          url: https://c.example.com/{{id}}
+          method: DELETE
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        self.assertEqual([s.path for s in steps],
+                         ["groupA/step-one", "groupA/step-two", "groupB/step-three"])
+
+    def test_missing_url_returns_error(self):
+        path = self._yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          method: GET
+""")
+        _, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+        self.assertIn("url", err.lower())
+
+    def test_missing_workflow_key_returns_error(self):
+        path = self._yaml("wf", """
+steps:
+  - url: https://api.example.com
+""")
+        _, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+        self.assertIn("workflow", err)
+
+    def test_invalid_yaml_returns_error(self):
+        path = self._yaml("wf", "workflow:\n  groupA:\n    bad: [\n")
+        _, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+
+    def test_no_endpoints_returns_error(self):
+        path = self._yaml("wf", """
+workflow:
+  description: Empty workflow
+""")
+        _, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+
+    def test_description_key_skipped(self):
+        path = self._yaml("wf", """
+workflow:
+  description: This is a test workflow
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+""")
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        self.assertEqual(len(steps), 1)
+
+
+# ---------------------------------------------------------------------------
+# Workflow integration (_run with --workflow)
+# ---------------------------------------------------------------------------
+
+class TestWorkflowRun(unittest.TestCase):
+
+    def _write_csv(self, name, rows):
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, prefix=name, newline=""
+        )
+        if rows:
+            w = csv.DictWriter(tmp, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return tmp.name
+
+    def _write_yaml(self, name, content):
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, prefix=name
+        )
+        tmp.write(content)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return tmp.name
+
+    def _mock_resp(self, status, body=b"ok"):
+        resp = MagicMock()
+        resp.status = status
+        resp.read.return_value = body
+        resp.headers = {}
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_basic_workflow_all_steps_succeed(self):
+        csv_path = self._write_csv("rows", [{"id": "1"}, {"id": "2"}])
+        wf_path = self._write_yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+      - step-two:
+          url: https://api.example.com/{{id}}/confirm
+          method: POST
+""")
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            return self._mock_resp(200)
+
+        with patch("sys.argv", ["bp", "--workflow", wf_path, "-c", csv_path, "-a", "none"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            bulk_post._run()
+
+        self.assertEqual(len(calls), 4)
+        self.assertIn("https://api.example.com/1", calls)
+        self.assertIn("https://api.example.com/1/confirm", calls)
+        self.assertIn("https://api.example.com/2", calls)
+        self.assertIn("https://api.example.com/2/confirm", calls)
+
+    def test_step_failure_stop_writes_retry_with_step_col(self):
+        csv_path = self._write_csv("rows", [{"id": "1"}])
+        wf_path = self._write_yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+      - step-two:
+          url: https://api.example.com/{{id}}/confirm
+          method: POST
+""")
+        retry_path = csv_path.replace(".csv", "_failed.csv")
+        self.addCleanup(lambda: os.unlink(retry_path) if os.path.exists(retry_path) else None)
+
+        call_count = [0]
+
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if "step-one" in req.full_url or "/1" in req.full_url:
+                if call_count[0] == 1:
+                    return self._mock_resp(500)
+            return self._mock_resp(200)
+
+        with patch("sys.argv", ["bp", "--workflow", wf_path, "-c", csv_path, "-a", "none",
+                                 "-r", retry_path]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             self.assertRaises(SystemExit):
+            bulk_post._run()
+
+        self.assertTrue(os.path.exists(retry_path))
+        with open(retry_path, newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        self.assertEqual(len(rows), 1)
+        self.assertIn(bulk_post._WORKFLOW_STEP_COL, rows[0])
+        self.assertEqual(rows[0][bulk_post._WORKFLOW_STEP_COL], "groupA/step-one")
+
+    def test_step_failure_on_error_continue_continues_steps(self):
+        csv_path = self._write_csv("rows", [{"id": "1"}])
+        wf_path = self._write_yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+          on_error: continue
+      - step-two:
+          url: https://api.example.com/{{id}}/confirm
+          method: POST
+          on_error: continue
+""")
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            if "/1" == req.full_url.split("example.com")[1]:
+                return self._mock_resp(500)
+            return self._mock_resp(200)
+
+        with patch("sys.argv", ["bp", "--workflow", wf_path, "-c", csv_path, "-a", "none"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             self.assertRaises(SystemExit):
+            bulk_post._run()
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any("/1/confirm" in u for u in calls))
+
+    def test_resume_skips_steps_before_failed_step(self):
+        """If _bulk_post_step is present in CSV row, steps before that path are skipped."""
+        csv_path = self._write_csv("rows", [
+            {"id": "1", bulk_post._WORKFLOW_STEP_COL: "groupA/step-two"}
+        ])
+        wf_path = self._write_yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}/one
+          method: GET
+      - step-two:
+          url: https://api.example.com/{{id}}/two
+          method: GET
+      - step-three:
+          url: https://api.example.com/{{id}}/three
+          method: GET
+""")
+        calls = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            return self._mock_resp(200)
+
+        with patch("sys.argv", ["bp", "--workflow", wf_path, "-c", csv_path, "-a", "none"]), \
+             patch("sys.stdin.isatty", return_value=False), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            bulk_post._run()
+
+        urls = [u for u in calls]
+        self.assertFalse(any("/one" in u for u in urls), "step-one should be skipped")
+        self.assertTrue(any("/two" in u for u in urls), "step-two should be executed")
+        self.assertTrue(any("/three" in u for u in urls), "step-three should be executed")
+
+    def test_url_and_workflow_mutually_exclusive(self):
+        csv_path = self._write_csv("rows", [{"id": "1"}])
+        wf_path = self._write_yaml("wf", """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+""")
+        import io
+        stderr_buf = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with patch("sys.argv", ["bp", "-u", "https://api.example.com/{{id}}",
+                                     "--workflow", wf_path, "-c", csv_path]), \
+                 patch("sys.stdin.isatty", return_value=False), \
+                 patch("sys.stderr", stderr_buf):
+                bulk_post._run()
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_neither_url_nor_workflow_exits(self):
+        csv_path = self._write_csv("rows", [{"id": "1"}])
+        import io
+        stderr_buf = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with patch("sys.argv", ["bp", "-c", csv_path]), \
+                 patch("sys.stdin.isatty", return_value=False), \
+                 patch("sys.stderr", stderr_buf):
+                bulk_post._run()
+        self.assertEqual(ctx.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
