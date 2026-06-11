@@ -1,6 +1,6 @@
 # bulk-post
 
-A zero-dependency Python CLI that reads a CSV file and fires one HTTP request per row. Supports Bearer token auth with automatic 401 re-prompt, a live terminal UI with pause/resume, and a retry file for failed rows.
+A near-stdlib Python CLI that reads a CSV file and fires one HTTP request per row. Supports Bearer token auth with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, multi-step workflows, and a retry file for failed rows. The only third-party dependency is PyYAML, used solely for `--workflow` mode.
 
 ## Requirements
 
@@ -9,17 +9,23 @@ A zero-dependency Python CLI that reads a CSV file and fires one HTTP request pe
 
 ## Installation
 
-Install globally with [pipx](https://pipx.pypa.io/):
+Install globally with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pipx install .
+uv tool install .
 bulk-post --help
+```
+
+After changing the code, re-install with:
+
+```bash
+uv tool install . --reinstall
 ```
 
 Or run directly without installing:
 
 ```bash
-python bulk_post.py --help
+python bulk_post.py --help          # workflow mode also needs: pip install pyyaml
 ```
 
 ## Usage
@@ -208,7 +214,7 @@ bulk-post -w workflow.yaml -c rows.csv
 ## Running tests
 
 ```bash
-python -m unittest discover tests/
+uv run python -m unittest discover tests/
 ```
 
-All tests use stdlib `unittest` only — no extra packages required.
+Tests use stdlib `unittest`, but the workflow-parsing cases require PyYAML. `uv run` installs it from `uv.lock` automatically; if you run `python -m unittest` directly, do so inside a virtualenv that has PyYAML.

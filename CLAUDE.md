@@ -1,27 +1,31 @@
 # bulk-post
 
-Pure-stdlib Python CLI (`bulk_post.py`) that fires HTTP requests for each row in a CSV file.
+Near-stdlib Python CLI (`bulk_post.py`) that fires HTTP requests for each row in a CSV file. Only external dependency is `pyyaml`, lazily imported and required solely for `--workflow` mode.
 
 ## Run & install
 
+Managed with [uv](https://docs.astral.sh/uv/).
+
 ```bash
 python bulk_post.py -u "https://api.example.com/{{id}}/cancel" -c rows.csv -m DELETE
-pipx install .          # installs `bulk-post` CLI globally
+uv tool install .              # install `bulk-post` CLI globally
+uv tool install . --reinstall  # re-install after code changes
 ```
 
 ## Tests
 
 ```bash
-python -m unittest discover tests/
+uv run python -m unittest discover tests/   # or plain `python -m unittest discover tests/` inside .venv
 ```
 
-No external dependencies — stdlib `unittest` only.
+Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML). `uv run` provides it from `uv.lock`; the non-workflow tests run on stdlib alone.
 
 ## Key flags
 
 | Flag | Short | Default | Notes |
 |------|-------|---------|-------|
-| `--url` | `-u` | required | `{{col}}` placeholders from CSV |
+| `--url` | `-u` | required* | `{{col}}` placeholders from CSV; *mutually exclusive with `--workflow` |
+| `--workflow` | `-w` | — | path to a workflow YAML (multi-step mode); mutually exclusive with `--url` |
 | `--csv` | `-c` | required | input CSV |
 | `--method` | `-m` | POST | HTTP method |
 | `--body` | `-b` | — | request body; supports `{{col}}` |
@@ -49,6 +53,10 @@ Three auth types via `--auth-type` / `-a` (default `none`):
 
 Tokens/credentials are Keycloak SSO values obtained from browser DevTools and cannot be fetched programmatically.
 
+## Workflow mode
+
+`--workflow <yaml>` replaces `--url` with a multi-step workflow. Each CSV row fires all steps in document order; steps within a row are sequential, while `--parallel` runs rows concurrently. Steps are grouped for shared auth; each step has `url`/`method`/`headers`/`body`/`on_error` (`stop` default | `continue`) and may override group auth. On failure the row is written to the retry file with a `_bulk_post_step` column (`group/step`); re-running that CSV resumes mid-workflow by skipping completed steps. See `README.md` and `workflow-example.yaml` for the full schema. The parallel path shares `_run_parallel_main_loop` with single-URL mode, so pause/resume/exit behave identically.
+
 ## Terminal UI
 
 When running in a real TTY (`termios` available), `_BottomBar` reserves the bottom two rows via an ANSI scroll region: a live progress bar on row `h-1` and a command input on row `h`. With `--debug --parallel`, a third reserved row `h-2` shows live queue depth, active thread count, and ok/fail counters (updated every 0.5 s). In non-TTY debug mode the same stats are printed to stderr. Commands: `/pause`, `/resume`, `/exit` (Tab for autocomplete). In non-TTY mode (pipes, tests) the bar is skipped entirely.
@@ -58,6 +66,7 @@ When running in a real TTY (`termios` available), `_BottomBar` reserves the bott
 - `_get_suggestion(buf)` — completion suffix for partial `/command`
 - `substitute(template, row)` → `(str, err_or_None)` — `{{var}}` substitution
 - `count_csv_rows(path)` → `int` — data rows excluding header; 0 on error
+- `parse_workflow(yaml_path)` → `(steps, err_or_None)` — load/validate a workflow YAML into an ordered step list (lazily imports `pyyaml`)
 - `resolve_token(flag_value, suspend=None, resume=None)` → `str` — bearer token from flag → `BULK_TOKEN` env → prompt
 - `prompt_new_token(suspend=None, resume=None)` → `str` — patch this in tests, not `input`
 - `resolve_basic_creds(flag_value, suspend=None, resume=None)` → `str` — `user:pass` from flag → `BULK_USER` env → prompt
