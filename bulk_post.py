@@ -349,6 +349,7 @@ class _ParallelState:
         self.ok = 0
         self.failed = 0
         self.processed = 0
+        self.in_flight = 0                   # rows currently executing an HTTP request
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.pause_event.set()               # set = running; clear = paused
@@ -896,10 +897,15 @@ def _parallel_worker(
 
         with state.lock:
             auth_header = state.auth_header
+            state.in_flight += 1
 
-        status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers = _fire(
-            row, args, auth_header, suspend=None, resume=None, auth_refresh_fn=auth_refresh_fn,
-        )
+        try:
+            status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers = _fire(
+                row, args, auth_header, suspend=None, resume=None, auth_refresh_fn=auth_refresh_fn,
+            )
+        finally:
+            with state.lock:
+                state.in_flight -= 1
 
         if new_auth_header:
             with state.lock:
@@ -990,23 +996,47 @@ def _run_parallel(
         t.start()
 
     _debug_ts = 0.0
+    _exiting = False
+    _pausing = False
+    _last_inflight_n = -1
     try:
         while any(t.is_alive() for t in threads):
             cmd = _poll_cmd(bar)
-            if cmd == _CMD_EXIT:
+
+            if cmd == _CMD_EXIT and not _exiting:
                 state.stop_event.set()
                 state.pause_event.set()  # unblock workers stuck in pause_event.wait()
-                with state.output_lock:
-                    _out(bar, f"{_GREY}[EXIT]  Stopping after current requests finish.{_RESET}")
-                break
-            elif cmd == _CMD_PAUSE:
+                _exiting = True
+                _pausing = False
+                _last_inflight_n = -1
+            elif cmd == _CMD_PAUSE and not _exiting and not _pausing:
                 state.pause_event.clear()
-                with state.output_lock:
-                    _out(bar, "[PAUSED]  Type /resume to continue...")
-            elif cmd == _CMD_RESUME:
+                _pausing = True
+                _last_inflight_n = -1
+            elif cmd == _CMD_RESUME and _pausing:
                 state.pause_event.set()
+                _pausing = False
                 with state.output_lock:
                     _out(bar, "[RESUMED]")
+
+            if _exiting or _pausing:
+                with state.lock:
+                    n = state.in_flight
+                if n != _last_inflight_n:
+                    _last_inflight_n = n
+                    word = "request" if n == 1 else "requests"
+                    with state.output_lock:
+                        if _exiting:
+                            if n > 0:
+                                _out(bar, f"{_GREY}[EXIT]  Waiting for {n} in-flight {word} to finish...{_RESET}")
+                            else:
+                                _out(bar, f"{_GREY}[EXIT]  Stopping...{_RESET}")
+                        else:
+                            if n > 0:
+                                _out(bar, f"[PAUSING]  Waiting for {n} in-flight {word} to finish...")
+                            else:
+                                _out(bar, "[PAUSED]  Type /resume to continue...")
+                                _pausing = False
             if debug:
                 now = time.monotonic()
                 if now - _debug_ts >= 0.5:
