@@ -1300,8 +1300,11 @@ def _run_parallel_main_loop(
                             if n > 0:
                                 _out(bar, f"[PAUSING]  Waiting for {n} in-flight {word} to finish...")
                             else:
+                                # Stay in the paused state until the user explicitly
+                                # resumes/exits. Re-printing is suppressed by the
+                                # _last_inflight_n guard above, so _pausing must NOT
+                                # be cleared here or /resume would become a no-op.
                                 _out(bar, "[PAUSED]  Type /resume to continue...")
-                                _pausing = False
             if debug:
                 now = time.monotonic()
                 if now - _debug_ts >= 0.5:

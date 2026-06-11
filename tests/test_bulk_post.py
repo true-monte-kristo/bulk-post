@@ -1342,5 +1342,73 @@ workflow:
         self.assertEqual(ctx.exception.code, 1)
 
 
+class TestResumeAfterDrain(unittest.TestCase):
+    """Regression: /resume must unblock workers after in-flight requests drain to 0.
+
+    Bug (commit 988bd5c): _pausing was reset to False once in_flight hit 0 while
+    printing "[PAUSED]". Because /resume is gated on `cmd == _CMD_RESUME and
+    _pausing`, resuming after a full drain became a no-op, leaving pause_event
+    cleared and workers parked in pause_event.wait() forever.
+    """
+
+    def test_resume_after_full_drain_unblocks_workers(self):
+        import contextlib
+        import io as _io
+
+        state = bulk_post._ParallelState(auth_header=None)
+        state.in_flight = 2  # two requests still running at /pause time
+
+        class _FakeThread:
+            def __init__(self):
+                self.alive = True
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, *a, **k):
+                pass
+
+        thread = _FakeThread()
+        producer = _FakeThread()
+
+        # Scripted commands, one per poll-loop iteration:
+        #   0: /pause                  -> pause_event cleared, _pausing=True
+        #   1: (None) still draining   -> "[PAUSING] ..."
+        #   2: (None) workers finished -> in_flight=0 -> "[PAUSED] ..."
+        #   3: /resume                 -> must re-set pause_event
+        #   4: (None) stop the loop
+        calls = {"n": 0}
+
+        def fake_poll(bar):
+            i = calls["n"]
+            calls["n"] += 1
+            if i == 0:
+                return bulk_post._CMD_PAUSE
+            if i == 2:
+                state.in_flight = 0  # all in-flight requests have completed
+                return None
+            if i == 3:
+                return bulk_post._CMD_RESUME
+            if i >= 4:
+                thread.alive = False  # let the loop exit after resume
+            return None
+
+        with patch.object(bulk_post, "_poll_cmd", fake_poll), \
+                contextlib.redirect_stdout(_io.StringIO()):
+            bulk_post._run_parallel_main_loop(
+                threads=[thread],
+                producer_thread=producer,
+                state=state,
+                bar=None,
+                debug=False,
+                work_queue=MagicMock(),
+            )
+
+        self.assertTrue(
+            state.pause_event.is_set(),
+            "/resume after a full in-flight drain failed to unblock workers",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
