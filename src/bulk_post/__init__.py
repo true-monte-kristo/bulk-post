@@ -3,13 +3,13 @@
 Bulk HTTP request script — iterates over a CSV file and fires a request per row.
 
 Usage:
-    python bulk_post.py \
+    python -m bulk_post \
         -u "https://example.com/api/invoices/{{id}}/cancel" \
         -c rows.csv \
         -m DELETE \
         -d 200
 
-    python bulk_post.py \
+    python -m bulk_post \
         -u "https://example.com/api/invoices/{{id}}/status" \
         -c rows.csv \
         -m PATCH \
