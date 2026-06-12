@@ -20,6 +20,24 @@ uv run python -m unittest discover tests/   # or plain `python -m unittest disco
 
 Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML). `uv run` provides it from `uv.lock`; the non-workflow tests run on stdlib alone.
 
+## Code style & conventions
+
+- Format with `ruff format` (or Black); lint with [Ruff](https://docs.astral.sh/ruff/); type-check with mypy/pyright. Annotate public functions.
+- Line length 88, 4-space indent. Imports grouped stdlib → third-party → local; no wildcard imports.
+- Prefer f-strings and `pathlib`; never use mutable default arguments.
+
+### Naming (PEP 8)
+
+| Kind | Convention | Example |
+|------|------------|---------|
+| Module / file | `lower_snake_case.py` | `bulk_post.py` |
+| Class / Exception | `PascalCase` | `_ParallelState` |
+| Function / variable | `lower_snake_case` | `resolve_token` |
+| Constant | `UPPER_SNAKE_CASE` | `_CMD_PAUSE` |
+| Non-public | leading underscore | `_poll_cmd`, `_BottomBar` |
+
+- Booleans read as predicates: `is_paused`, `has_token`. Avoid ambiguous names `l`, `O`, `I`.
+
 ## Key flags
 
 | Flag | Short | Default | Notes |
@@ -75,3 +93,11 @@ When running in a real TTY (`termios` available), `_BottomBar` reserves the bott
 - `http_request(url, auth_header, method, body, timeout=30, content_type="application/json")` → `(status_or_None, body, elapsed_s, req_headers, resp_headers)`
 - `_mask_headers(headers)` → `dict` — replaces `Authorization` values with `*****`
 - `_run()` — full pipeline; patch `sys.argv` + `sys.stdin.isatty` to test
+
+## Project rules
+
+Detailed, prescriptive rules for building features (auto-imported into context):
+
+@.claude/rules/cli.md
+@.claude/rules/error-handling.md
+@.claude/rules/testing-and-deps.md
