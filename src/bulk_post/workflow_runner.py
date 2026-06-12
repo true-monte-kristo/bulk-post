@@ -1,4 +1,15 @@
-"""Workflow execution: sequential and parallel multi-step runners."""
+"""Workflow execution: sequential and parallel multi-step runners.
+
+Each CSV row runs all workflow steps in document order. ``_run_workflow_loop``
+does this one row at a time; ``_run_workflow_parallel`` reuses the same
+producer / bounded-queue / worker model and shared ``_run_parallel_main_loop``
+as the single-URL runner (see ``runner`` for the threading and locking
+contract), with ``_WorkflowParallelState`` holding per-step auth headers.
+
+On a step failure the row is written to the retry file with a
+``_bulk_post_step`` column naming the first failed step, so a re-run resumes
+mid-workflow; ``on_error: continue`` instead proceeds to the remaining steps.
+"""
 
 from __future__ import annotations
 
@@ -209,6 +220,14 @@ def _workflow_parallel_worker(
     auth_refresh_fns: dict,
     debug: bool = False,
 ) -> None:
+    """Worker thread: run every step of one row, pulled off ``work_queue``.
+
+    Mirrors ``runner._parallel_worker`` but iterates a row's steps in order,
+    honoring per-step ``on_error`` (stop vs. continue) and resume via
+    ``_WORKFLOW_STEP_COL``. Brackets the row with ``state.in_flight`` +/- 1,
+    reads/writes per-step auth under ``state.lock``, and serializes output via
+    ``state.output_lock``. Exits on the ``None`` poison pill or ``stop_event``.
+    """
     thread_tag = f"[{threading.current_thread().name}] " if debug else ""
     while True:
         if state.stop_event.is_set():
@@ -365,6 +384,13 @@ def _run_workflow_parallel(
     offset: int,
     total_rows: int,
 ) -> tuple[int, int, int]:
+    """Run the workflow concurrently across rows (steps stay sequential per row).
+
+    Spawns a producer and ``min(--concurrency-level, rows)`` workers sharing a
+    bounded queue, then drives ``_run_parallel_main_loop`` on the main thread.
+    Returns ``(ok, failed, processed)`` counted by row — a row is ``ok`` only if
+    all of its steps succeeded.
+    """
     effective_rows = total_rows - offset
     if effective_rows <= 0:
         return 0, 0, 0
@@ -376,6 +402,10 @@ def _run_workflow_parallel(
     debug = getattr(args, "debug", False)
 
     def _producer() -> None:
+        """Stream rows onto the queue, then one poison pill per worker.
+
+        Back-pressures on ``queue.Full`` and stops early on ``state.stop_event``.
+        """
         for line_num, row in enumerate(reader, start=offset + 1):
             while not state.stop_event.is_set():
                 try:

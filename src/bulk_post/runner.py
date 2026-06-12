@@ -1,4 +1,28 @@
-"""Single-URL row execution: sequential and parallel runners."""
+"""Single-URL row execution: sequential and parallel runners.
+
+Sequential mode (``_run_loop``) fires one row at a time on the calling thread,
+honoring ``--delay`` and the interactive /pause /resume /exit commands.
+
+Parallel mode (``_run_parallel``) uses a producer/consumer thread pool::
+
+    reader -> _producer -> work_queue (bounded) -> N _parallel_worker threads
+
+One ``None`` "poison pill" per worker is enqueued after the last row to signal
+end-of-input. ``_run_parallel_main_loop`` runs on the main thread alongside the
+workers and owns the UI: it polls commands, prints the in-flight countdown and
+debug bar, then joins the producer and workers on exit.
+
+Concurrency contract (see also ``_ParallelState``):
+
+- ``state.lock`` guards the counters (ok/failed/processed/in_flight), the shared
+  ``auth_header``, and writes to ``retry_writer`` / ``log_file``.
+- ``state.output_lock`` serializes all stdout / bottom-bar writes.
+- ``state.pause_event`` gates the workers (set = running, clear = paused);
+  ``state.stop_event`` tells workers and the producer to finish.
+
+Workers are daemon threads, and the producer back-pressures on a bounded queue
+so a large CSV is never fully loaded into memory.
+"""
 
 from __future__ import annotations
 
@@ -192,6 +216,13 @@ def _run_loop(
     offset: int,
     total_rows: int,
 ) -> tuple[int, int, int]:
+    """Run rows sequentially on the calling thread.
+
+    Fires each row via ``_fire``, logs the outcome, writes failures to the retry
+    file and failure log, updates progress, and applies ``--delay`` between rows.
+    Honors the interactive /pause and /exit commands. Returns
+    ``(ok, failed, processed)``.
+    """
     remaining = total_rows - offset
     processed = ok = failed = 0
     for line_num, row in enumerate(reader, start=offset + 1):
@@ -279,6 +310,15 @@ def _parallel_worker(
     auth_refresh_fn: Callable,
     debug: bool = False,
 ) -> None:
+    """Worker thread: pull ``(line_num, row)`` items off ``work_queue`` and fire them.
+
+    Runs until it receives the ``None`` poison pill or ``state.stop_event`` is
+    set, blocking on ``state.pause_event`` while paused. Brackets each request
+    with ``state.in_flight`` +/- 1 (under ``state.lock``), publishes any
+    refreshed 401 auth header back to ``state.auth_header``, and records the
+    outcome (counters, retry file, failure log) under the lock. All console
+    output goes through ``state.output_lock``.
+    """
     thread_tag = f"[{threading.current_thread().name}] " if debug else ""
     while True:
         if state.stop_event.is_set():
@@ -481,6 +521,13 @@ def _run_parallel(
     offset: int,
     total_rows: int,
 ) -> tuple[int, int, int]:
+    """Run rows concurrently with a producer/worker thread pool.
+
+    Spawns one producer (streaming the CSV onto a bounded queue) and
+    ``min(--concurrency-level, rows)`` worker threads, then drives the UI loop
+    on the main thread until all work drains. ``--delay`` is ignored in this
+    mode. Returns ``(ok, failed, processed)``.
+    """
     effective_rows = total_rows - offset
     if effective_rows <= 0:
         return 0, 0, 0
@@ -492,6 +539,11 @@ def _run_parallel(
     debug = getattr(args, "debug", False)
 
     def _producer() -> None:
+        """Stream rows onto the queue, then one poison pill per worker.
+
+        Back-pressures (retries on ``queue.Full``) to keep memory bounded, and
+        stops early if ``state.stop_event`` is set (e.g. on /exit).
+        """
         for line_num, row in enumerate(reader, start=offset + 1):
             while not state.stop_event.is_set():
                 try:

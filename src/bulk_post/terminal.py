@@ -55,6 +55,7 @@ def _get_suggestion(buf: str) -> str:
 
 
 def _render_bar(current: int, total: int) -> str:
+    """Render the ``====>`` progress-bar string of width ``BAR_WIDTH``."""
     filled = int(BAR_WIDTH * current / total)
     return (
         "=" * filled
@@ -92,6 +93,11 @@ class _BottomBar:
     # ------------------------------------------------------------------ public
 
     def start(self) -> bool:
+        """Reserve the bottom rows, enter raw mode, and start the input thread.
+
+        Returns False (caller falls back to no bar) if the terminal is too short
+        or raw mode can't be enabled.
+        """
         import shutil
 
         self._h = shutil.get_terminal_size((80, 24)).lines
@@ -113,6 +119,7 @@ class _BottomBar:
         return True
 
     def stop(self) -> None:
+        """Stop the input thread, restore terminal settings, and clear the bottom rows."""
         self._active = False
         if self._thread:
             self._thread.join(timeout=0.2)
@@ -158,6 +165,7 @@ class _BottomBar:
             self.resume()
 
     def write_line(self, text: str) -> None:
+        """Print ``text`` in the scroll region above the bar, preserving the cmd line."""
         with self._lock:
             buf = self._buf
         # Move to last scrollable row → \n scrolls the region up → print on fresh row
@@ -169,6 +177,7 @@ class _BottomBar:
             sys.stdout.flush()
 
     def update_progress(self, current: int, total: int) -> None:
+        """Redraw the progress-bar row (h-1) without disturbing the cmd line."""
         if total == 0:
             return
         bar = _render_bar(current, total)
@@ -183,6 +192,7 @@ class _BottomBar:
             sys.stdout.flush()
 
     def update_debug(self, text: str) -> None:
+        """Redraw the debug row (h-2) in ``--debug`` mode; no-op otherwise."""
         if not self._debug_mode:
             return
         with self._lock:
@@ -195,6 +205,7 @@ class _BottomBar:
             sys.stdout.flush()
 
     def poll(self) -> str | None:
+        """Return the next command typed into the bar, or None if none is pending."""
         try:
             return self._q.get_nowait()
         except queue.Empty:
@@ -215,6 +226,7 @@ class _BottomBar:
             tty.setraw(sys.stdin.fileno())
 
     def _handle_char(self, ch: str) -> None:
+        """Dispatch one input char: Enter submits, Tab completes, arrows navigate, etc."""
         if ch in ("\r", "\n"):
             with self._lock:
                 cmd, self._buf = self._buf, ""
@@ -245,6 +257,7 @@ class _BottomBar:
             self._redraw_cmd()
 
     def _handle_escape(self) -> None:
+        """Decode an arrow-key escape sequence (ESC [ A/B) into nav up/down."""
         # Arrow keys arrive as ESC [ A/B (3 bytes). _input_loop reads ESC via
         # sys.stdin.buffer.read1(1) (binary), so the remaining [ and A/B bytes
         # stay in BufferedReader._read_buf (same OS read chunk) — not in
@@ -280,6 +293,7 @@ class _BottomBar:
             self._nav_down()
 
     def _nav_up(self) -> None:
+        """Cycle the cmd buffer up through the command list (saving free input first)."""
         with self._lock:
             if self._nav_idx == -1:
                 self._saved_buf = self._buf
@@ -290,6 +304,7 @@ class _BottomBar:
         self._redraw_cmd()
 
     def _nav_down(self) -> None:
+        """Cycle the cmd buffer down the command list; restore free input at the end."""
         with self._lock:
             if self._nav_idx == -1:
                 return
@@ -302,6 +317,7 @@ class _BottomBar:
         self._redraw_cmd()
 
     def _input_loop(self) -> None:
+        """Input-thread loop: read stdin in raw mode and feed chars to ``_handle_char``."""
         try:
             tty.setraw(sys.stdin.fileno())
         except termios.error:
@@ -326,6 +342,7 @@ class _BottomBar:
             pass
 
     def _redraw_cmd(self) -> None:
+        """Repaint the command-input row with the current buffer + ghost suggestion."""
         with self._lock:
             buf = self._buf
         suggestion = _get_suggestion(buf)
@@ -347,6 +364,7 @@ class _BottomBar:
 
 
 def print_progress(current: int, total: int) -> None:
+    """Print a one-line ``\\r`` progress bar to stdout (no-bar / non-TTY fallback)."""
     if total == 0:
         return
     bar = _render_bar(current, total)
@@ -355,6 +373,7 @@ def print_progress(current: int, total: int) -> None:
 
 
 def _out(bar: _BottomBar | None, text: str) -> None:
+    """Write a line via the bottom bar if present, else plain ``print``."""
     if bar:
         bar.write_line(text)
     else:
@@ -362,6 +381,7 @@ def _out(bar: _BottomBar | None, text: str) -> None:
 
 
 def _progress(bar: _BottomBar | None, current: int, total: int) -> None:
+    """Update the progress display via the bottom bar if present, else stdout."""
     if bar:
         bar.update_progress(current, total)
     else:
@@ -379,6 +399,7 @@ def print_verbose(
     resp_headers: dict,
     elapsed: float,
 ) -> None:
+    """Print the full request and response (auth headers masked) for ``--verbose``."""
     _out(bar, f"  > {method} {url}")
     for k, v in _mask_headers(req_headers).items():
         _out(bar, f"  > {k}: {v}")
@@ -418,4 +439,5 @@ def _wait_for_resume() -> bool:
 
 
 def _poll_cmd(bar: _BottomBar | None) -> str | None:
+    """Return a pending command from the bottom bar (TTY) or stdin (non-TTY)."""
     return bar.poll() if bar else _stdin_command()

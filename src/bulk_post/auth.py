@@ -16,6 +16,11 @@ def resolve_token(
     suspend: Callable | None = None,
     resume: Callable | None = None,
 ) -> str:
+    """Resolve a bearer token: ``--token`` flag -> ``BULK_TOKEN`` env -> prompt.
+
+    Exits with code 1 if none is provided. ``suspend``/``resume`` pause the
+    bottom bar around the interactive prompt.
+    """
     if flag_value:
         return flag_value
     env = os.environ.get("BULK_TOKEN", "").strip()
@@ -39,6 +44,7 @@ def prompt_new_token(
     suspend: Callable | None = None,
     resume: Callable | None = None,
 ) -> str:
+    """Prompt for a fresh bearer token after a 401 (exits 1 if none given)."""
     if suspend:
         suspend()
     print("\n[AUTH]  Token expired (401). Grab a fresh token from browser DevTools.")
@@ -59,6 +65,10 @@ def resolve_basic_creds(
     suspend: Callable | None = None,
     resume: Callable | None = None,
 ) -> str:
+    """Resolve basic-auth ``user:pass``: ``--user`` flag -> ``BULK_USER`` env -> prompt.
+
+    Exits with code 1 if none is provided.
+    """
     if flag_value:
         return flag_value
     env = os.environ.get("BULK_USER", "").strip()
@@ -82,6 +92,7 @@ def prompt_new_basic_creds(
     suspend: Callable | None = None,
     resume: Callable | None = None,
 ) -> str:
+    """Prompt for new basic-auth credentials after a 401 (exits 1 if none given)."""
     if suspend:
         suspend()
     print("\n[AUTH]  Credentials rejected (401). Enter new credentials.")
@@ -102,6 +113,11 @@ def resolve_auth_header(
     suspend: Callable | None = None,
     resume: Callable | None = None,
 ) -> str | None:
+    """Build the ``Authorization`` header for ``args.auth_type``.
+
+    Returns ``None`` for ``none``; otherwise resolves the token/credentials
+    (prompting once at startup if needed) into a ``Bearer``/``Basic`` value.
+    """
     if args.auth_type == "none":
         return None
     if args.auth_type == "bearer":

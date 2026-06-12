@@ -11,6 +11,11 @@ PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 
 
 def substitute(template: str, row: dict) -> tuple[str, str | None]:
+    """Replace every ``{{col}}`` in ``template`` with ``row[col]``.
+
+    Returns ``(result, None)`` on success, or ``(template, error)`` if the row
+    is missing any referenced column.
+    """
     missing = [p for p in PLACEHOLDER_RE.findall(template) if p not in row]
     if missing:
         return template, f"Missing CSV columns for placeholders: {missing}"
@@ -18,6 +23,12 @@ def substitute(template: str, row: dict) -> tuple[str, str | None]:
 
 
 def _validate_body_template(template: str, content_type: str) -> str | None:
+    """Check that the body template is structurally valid for its content type.
+
+    Substitutes placeholders with ``null`` and parses the result as JSON or XML
+    (selected by ``content_type``). Returns an error string, or ``None`` if valid
+    or the type isn't JSON/XML.
+    """
     dummy = PLACEHOLDER_RE.sub("null", template)
     ct = content_type.lower()
     if "json" in ct:
@@ -36,6 +47,12 @@ def _validate_body_template(template: str, content_type: str) -> str | None:
 def _validate_placeholders(
     args: argparse.Namespace, fieldnames: list | None
 ) -> str | None:
+    """Validate single-URL placeholders against the CSV header.
+
+    Checks ``--header`` format, ensures every ``{{col}}`` in the URL, body, and
+    header values has a matching CSV column, and validates the body template.
+    Returns an error string, or ``None`` if everything checks out.
+    """
     header_val_placeholders: list = []
     for raw in args.header or []:
         if ": " not in raw:

@@ -68,6 +68,7 @@ def http_request(
 
 
 def _mask_headers(headers: dict) -> dict:
+    """Return a copy of ``headers`` with any ``Authorization`` value redacted."""
     return {
         k: "*****" if k.lower() == "authorization" else v for k, v in headers.items()
     }

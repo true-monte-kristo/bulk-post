@@ -33,6 +33,7 @@ class _CliError(Exception):
 
 
 def _get_version() -> str:
+    """Return the installed package version, or ``"unknown"`` if not installed."""
     try:
         return importlib.metadata.version("bulk-post")
     except importlib.metadata.PackageNotFoundError:
@@ -45,6 +46,7 @@ def _get_version() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Construct the ``bulk-post`` argument parser (no parsing or execution)."""
     parser = argparse.ArgumentParser(
         prog="bulk-post", description="Bulk HTTP requests from CSV rows"
     )
@@ -173,6 +175,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run(argv: list[str] | None = None) -> int:
+    """Parse args, validate, and dispatch a single-URL or workflow run.
+
+    Pipeline: parse ``argv`` -> validate flags and ``{{placeholder}}`` columns
+    -> open the retry file and failure log -> dispatch to the sequential or
+    parallel runner (single-URL or workflow) -> print the summary. Returns the
+    process exit code: ``0`` if every row succeeded, ``1`` if any row failed.
+    Setup/validation errors are raised as ``_CliError`` (caught by ``main``);
+    argparse handles its own usage errors with exit code ``2``.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -351,6 +362,12 @@ def _run(argv: list[str] | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: run ``_run`` and map outcomes to an exit code.
+
+    Returns ``_run``'s code, ``_CliError.code`` for setup/validation failures,
+    ``130`` on Ctrl-C, or ``0`` on a broken output pipe. The console script and
+    ``python -m bulk_post`` both invoke this via ``sys.exit(main())``.
+    """
     try:
         return _run(argv)
     except _CliError as exc:

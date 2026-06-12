@@ -42,6 +42,12 @@ _HEADER_CONTENT_TYPE = "content-type"  # lowercased, for case-insensitive match
 
 @dataclasses.dataclass
 class WorkflowStep:
+    """One normalized, ready-to-fire workflow step with resolved auth.
+
+    Produced by ``parse_workflow``. ``path`` is the unique ``group/name`` id used
+    for retry/resume (``_bulk_post_step``) and per-step auth lookup.
+    """
+
     path: str  # "groupA/call-example-api"
     url: str
     method: str

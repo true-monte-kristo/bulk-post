@@ -12,6 +12,7 @@ from .terminal import _BottomBar, _out
 
 
 def count_csv_rows(path: str) -> int:
+    """Count data rows (excluding the header); returns 0 if the file can't be read."""
     try:
         with open(path, newline="", encoding="utf-8") as f:
             return sum(1 for _ in csv.DictReader(f))
@@ -30,6 +31,7 @@ def _open_retry_writer(
 
 
 def _open_log_file(log_path: pathlib.Path) -> IO[str]:
+    """Open (append) the failure log and write a run-start banner. Caller closes it."""
     f = open(log_path, "a", encoding="utf-8")  # noqa: SIM115  # caller owns lifecycle
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     f.write(f"\n{'=' * 60}\nRun started {ts}\n{'=' * 60}\n")
@@ -50,6 +52,12 @@ def _write_failure_log(
     resp_headers: dict,
     elapsed: float,
 ) -> None:
+    """Append one human-readable failure entry to the log.
+
+    Writes method/URL/headers/body/status/timing/response for request failures,
+    or just the error message for substitution skips (``url == ""``). Request
+    headers are masked via ``_mask_headers``.
+    """
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     parts = [f"--- {kind}  row {line_num}  {ts} ---"]
     if url:
@@ -78,6 +86,7 @@ def _write_failure_log(
 
 
 def _skip_rows(reader: csv.DictReader, count: int, bar: _BottomBar | None) -> None:
+    """Advance ``reader`` past ``count`` data rows (used to implement ``--offset``)."""
     if count:
         _out(bar, f"Skipping {count} rows, starting from row {count + 1}.")
         for _ in range(count):
