@@ -1,6 +1,6 @@
 # bulk-post
 
-A near-stdlib Python CLI that reads a CSV file and fires one HTTP request per row. Supports bearer or basic auth (default: no auth) with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, multi-step workflows, and a retry file for failed rows. The only third-party dependency is PyYAML, used solely for `--workflow` mode.
+A near-stdlib Python CLI that drives HTTP requests from a CSV file — one request per row in single-URL mode, or a multi-step request workflow per row in `--workflow` mode. Supports bearer or basic auth (default: no auth) with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, and a retry file for failed rows. The only third-party dependency is PyYAML, used solely for `--workflow` mode.
 
 ## Requirements
 

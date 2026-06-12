@@ -1,6 +1,6 @@
 # bulk-post
 
-Near-stdlib Python package (`src/bulk_post/`) that fires HTTP requests for each row in a CSV file. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Only external dependency is `pyyaml`, lazily imported and required solely for `--workflow` mode.
+Near-stdlib Python package (`src/bulk_post/`) that drives HTTP requests from a CSV file — one request per row in single-URL mode, or a multi-step request workflow per row in `--workflow` mode. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Only external dependency is `pyyaml`, lazily imported and required solely for `--workflow` mode.
 
 ## Run & install
 
