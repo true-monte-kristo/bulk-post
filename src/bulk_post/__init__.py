@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Bulk HTTP request runner — iterates over a CSV file and fires one request per row,
-or a multi-step request workflow per row in --workflow mode.
+Bulk HTTP request runner — fires templated requests whose {{placeholder}} slots are
+filled from each CSV row: one request per row, or a multi-step workflow per row in
+--workflow mode.
 
 Usage:
     python -m bulk_post \
