@@ -28,6 +28,7 @@ import contextlib
 import csv
 import dataclasses
 import datetime
+import importlib.metadata
 import io
 import json
 import os
@@ -85,6 +86,13 @@ _COMMANDS = [_CMD_PAUSE, _CMD_RESUME, _CMD_EXIT]
 _QUEUE_MAXSIZE = 500  # max rows buffered in memory in parallel mode
 
 _WORKFLOW_STEP_COL = "_bulk_post_step"
+
+
+def _get_version() -> str:
+    try:
+        return importlib.metadata.version("bulk-post")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -2041,6 +2049,8 @@ def main() -> None:
 
 def _run() -> None:
     parser = argparse.ArgumentParser(description="Bulk HTTP requests from CSV rows")
+    parser.add_argument("--version", "-V", action="version",
+                        version=f"%(prog)s {_get_version()}")
     parser.add_argument(
         "--url",
         "-u",

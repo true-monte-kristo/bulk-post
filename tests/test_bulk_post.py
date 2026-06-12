@@ -1950,5 +1950,15 @@ class TestResumeAfterDrain(unittest.TestCase):
         )
 
 
+class TestVersionFlag(unittest.TestCase):
+    def test_version_flag_prints_and_exits_zero(self):
+        with self.assertRaises(SystemExit) as ctx, patch("sys.argv", ["bulk-post", "--version"]):
+            bulk_post._run()
+        self.assertEqual(ctx.exception.code, 0)
+
+    def test_get_version_returns_string(self):
+        self.assertIsInstance(bulk_post._get_version(), str)
+
+
 if __name__ == "__main__":
     unittest.main()
