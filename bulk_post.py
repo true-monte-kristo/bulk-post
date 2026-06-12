@@ -2216,7 +2216,7 @@ def _run() -> None:
         sys.exit(1)
 
     try:
-        csv_file = open(csv_path, newline="", encoding="utf-8")  # noqa: SIM115  # OSError handling requires try/except, not with
+        csv_file = open(csv_path, newline="", encoding="utf-8")  # noqa: SIM115  # lifecycle managed by the outer `with csv_file:` block below
     except OSError as e:
         print(f"[ERROR] Cannot open CSV file: {e}", file=sys.stderr)
         sys.exit(1)

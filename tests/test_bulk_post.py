@@ -1714,9 +1714,8 @@ workflow:
 
         def fake_urlopen(req, timeout=None):
             call_count[0] += 1
-            if "step-one" in req.full_url or "/1" in req.full_url:  # noqa: SIM102  # combining with `and` changes semantics: outer or-branch has no else
-                if call_count[0] == 1:
-                    return self._mock_resp(500)
+            if ("step-one" in req.full_url or "/1" in req.full_url) and call_count[0] == 1:
+                return self._mock_resp(500)
             return self._mock_resp(200)
 
         with (
