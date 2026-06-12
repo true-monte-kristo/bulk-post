@@ -8,6 +8,7 @@ import pathlib
 from typing import IO, Any
 
 from .http import _mask_headers
+from .terminal import _BottomBar, _out
 
 
 def count_csv_rows(path: str) -> int:
@@ -76,14 +77,7 @@ def _write_failure_log(
     log_file.flush()
 
 
-def _out(bar: Any, text: str) -> None:
-    if bar:
-        bar.write_line(text)
-    else:
-        print(text)
-
-
-def _skip_rows(reader: csv.DictReader, count: int, bar: Any) -> None:
+def _skip_rows(reader: csv.DictReader, count: int, bar: _BottomBar | None) -> None:
     if count:
         _out(bar, f"Skipping {count} rows, starting from row {count + 1}.")
         for _ in range(count):
