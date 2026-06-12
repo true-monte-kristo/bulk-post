@@ -1,7 +1,8 @@
 # CLI design rules
 
-Project-specific rules for `bulk_post.py`. This is a single-file CLI built on
-stdlib `argparse`, exposed as `bulk-post` via `[project.scripts]` (`bulk_post:main`).
+Project-specific rules for the `bulk_post` package (`src/bulk_post/`). A small CLI
+built on stdlib `argparse`, entry point `bulk_post.cli:main`, exposed as `bulk-post`
+via `[project.scripts]`.
 
 ## Entry point & structure
 - `main()` MUST return an `int` exit code; the entry point ends with `sys.exit(main())`.

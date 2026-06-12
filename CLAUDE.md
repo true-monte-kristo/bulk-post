@@ -31,7 +31,7 @@ Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML
 
 | Kind | Convention | Example |
 |------|------------|---------|
-| Module / file | `lower_snake_case.py` | `bulk_post.py` |
+| Module / file | `lower_snake_case.py` | `cli.py` |
 | Class / Exception | `PascalCase` | `_ParallelState` |
 | Function / variable | `lower_snake_case` | `resolve_token` |
 | Constant | `UPPER_SNAKE_CASE` | `_CMD_PAUSE` |
@@ -98,7 +98,6 @@ All names below are importable directly from `bulk_post` (e.g. `from bulk_post i
 - `resolve_auth_header(args, suspend=None, resume=None)` → `Optional[str]` — returns full `Authorization` header value or `None` for auth_type `none`
 - `http_request(url, auth_header, method, body, timeout=30, content_type="application/json")` → `(status_or_None, body, elapsed_s, req_headers, resp_headers)`
 - `_mask_headers(headers)` → `dict` — replaces `Authorization` values with `*****`
-- `_run()` — full pipeline; patch `sys.argv` + `sys.stdin.isatty` to test
 
 ## Project rules
 
