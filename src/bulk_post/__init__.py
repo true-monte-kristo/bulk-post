@@ -30,7 +30,6 @@ import dataclasses
 import datetime
 import importlib.metadata
 import io
-import json
 import os
 import pathlib
 import queue
@@ -41,9 +40,16 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as _ET
 from collections.abc import Callable
 from typing import IO, Any, cast
+
+from .templating import (
+    _validate_body_template as _validate_body_template,
+)
+from .templating import (
+    _validate_placeholders,
+    substitute,
+)
 
 try:
     import select as _select_mod
@@ -848,13 +854,6 @@ def resolve_auth_header(
     return f"Basic {base64.b64encode(creds.encode()).decode()}"
 
 
-def substitute(template: str, row: dict) -> tuple[str, str | None]:
-    missing = [p for p in PLACEHOLDER_RE.findall(template) if p not in row]
-    if missing:
-        return template, f"Missing CSV columns for placeholders: {missing}"
-    return PLACEHOLDER_RE.sub(lambda m: row[m.group(1)], template), None
-
-
 def http_request(
     url: str,
     auth_header: str | None,
@@ -1033,22 +1032,6 @@ def _write_failure_log(
     log_file.flush()
 
 
-def _validate_body_template(template: str, content_type: str) -> str | None:
-    dummy = PLACEHOLDER_RE.sub("null", template)
-    ct = content_type.lower()
-    if "json" in ct:
-        try:
-            json.loads(dummy)
-        except json.JSONDecodeError as e:
-            return f"Invalid JSON body template: {e}"
-    elif "xml" in ct:
-        try:
-            _ET.fromstring(dummy)
-        except _ET.ParseError as e:
-            return f"Invalid XML body template: {e}"
-    return None
-
-
 def _make_auth_refresh_fn(
     args,
     state: "_ParallelState",
@@ -1184,39 +1167,6 @@ def _log_row(
             f"{_RED}{thread_tag}[FAIL]  {label}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}",
         )
         return False
-
-
-def _validate_placeholders(args: argparse.Namespace, fieldnames: list | None) -> None:
-    header_val_placeholders: list = []
-    for raw in args.header or []:
-        if ": " not in raw:
-            print(
-                f"[ERROR] --header value must be in 'Name: value' format, got: {raw!r}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        _, _, val_tmpl = raw.partition(": ")
-        header_val_placeholders += PLACEHOLDER_RE.findall(val_tmpl)
-
-    all_placeholders = (
-        PLACEHOLDER_RE.findall(args.url)
-        + (PLACEHOLDER_RE.findall(args.body) if args.body else [])
-        + header_val_placeholders
-    )
-    if not all_placeholders:
-        return
-    missing = [p for p in all_placeholders if p not in (fieldnames or [])]
-    if missing:
-        print(
-            f"[ERROR] CSV is missing columns required by placeholders: {missing}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if args.body:
-        err = _validate_body_template(args.body, args.content_type)
-        if err:
-            print(f"[ERROR] {err}", file=sys.stderr)
-            sys.exit(1)
 
 
 def _skip_rows(reader: csv.DictReader, count: int, bar: _BottomBar | None) -> None:
