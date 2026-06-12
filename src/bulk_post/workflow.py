@@ -21,6 +21,20 @@ from .templating import PLACEHOLDER_RE, substitute
 
 _WORKFLOW_STEP_COL = "_bulk_post_step"
 
+# Auth types (values of a group/step `auth.type`)
+_AUTH_BEARER = "bearer"
+_AUTH_BASIC = "basic"
+_AUTH_NONE = "none"
+
+# Step on-error policies
+_ON_ERROR_STOP = "stop"
+_ON_ERROR_CONTINUE = "continue"
+
+# Endpoint defaults
+_DEFAULT_METHOD = "POST"
+_DEFAULT_CONTENT_TYPE = "application/json"
+_HEADER_CONTENT_TYPE = "content-type"  # lowercased, for case-insensitive match
+
 # ---------------------------------------------------------------------------
 # Workflow data structures
 # ---------------------------------------------------------------------------
@@ -37,6 +51,53 @@ class WorkflowStep:
     auth_type: str  # "bearer", "basic", "none"
     auth_raw: str  # raw credential: token or user:pass
     on_error: str  # "stop" or "continue"
+
+
+def _parse_auth_block(auth: dict | None) -> tuple[str, str]:
+    """Normalize a raw ``auth:`` mapping into ``(auth_type, auth_raw)``.
+
+    ``auth_raw`` is the bearer token, ``user:pass`` for basic, or ``""``.
+    Shared by group-level and step-level auth.
+    """
+    auth = auth or {}
+    auth_type = (auth.get("type") or _AUTH_NONE).lower()
+    if auth_type == _AUTH_BEARER:
+        return _AUTH_BEARER, auth.get("token") or ""
+    if auth_type == _AUTH_BASIC:
+        user = auth.get("user") or ""
+        pw = auth.get("password") or ""
+        return _AUTH_BASIC, f"{user}:{pw}" if (user or pw) else ""
+    return _AUTH_NONE, ""
+
+
+def _endpoint_name_and_data(entry: dict) -> tuple[str, dict]:
+    """Resolve an endpoint entry into ``(name, ep_data)``.
+
+    Two YAML styles are supported: a ``{name: {…fields}}`` mapping (name is the
+    first key whose value is a mapping), or a flat mapping whose keys are the
+    fields directly (name derived from the first key).
+    """
+    for k, v in entry.items():
+        if isinstance(v, dict):
+            return k, v
+    # Flat style: the entry dict IS the endpoint data; use the first key as name.
+    name = next(iter(entry))
+    ep_data = {k: v for k, v in entry.items() if k != name or isinstance(v, dict)}
+    return name, ep_data or entry
+
+
+def _extract_content_type(raw_headers: dict) -> tuple[str, dict]:
+    """Pop a case-insensitive ``Content-Type`` out of ``raw_headers``.
+
+    Returns ``(content_type, headers_without_content_type)`` and never mutates
+    the caller's dict.
+    """
+    headers = dict(raw_headers)
+    content_type = _DEFAULT_CONTENT_TYPE
+    ct_key = next((k for k in headers if k.lower() == _HEADER_CONTENT_TYPE), None)
+    if ct_key:
+        content_type = headers.pop(ct_key)
+    return content_type, headers
 
 
 def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
@@ -78,17 +139,7 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
         if not isinstance(group_data, dict):
             return [], f"Group '{group_name}' must be a mapping"
 
-        group_auth = group_data.get("auth", {}) or {}
-        group_auth_type = (group_auth.get("type") or "none").lower()
-        if group_auth_type == "bearer":
-            group_auth_raw = group_auth.get("token") or ""
-        elif group_auth_type == "basic":
-            user = group_auth.get("user") or ""
-            pw = group_auth.get("password") or ""
-            group_auth_raw = f"{user}:{pw}" if (user or pw) else ""
-        else:
-            group_auth_type = "none"
-            group_auth_raw = ""
+        group_auth_type, group_auth_raw = _parse_auth_block(group_data.get("auth"))
 
         endpoints = group_data.get("endpoints")
         if not endpoints:
@@ -100,28 +151,7 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
             if not isinstance(entry, dict):
                 return [], f"Each endpoint in group '{group_name}' must be a mapping"
 
-            # The endpoint name is the first key whose value is itself a dict,
-            # OR the entry itself may be a flat dict (indentation style without a
-            # nested name key) — in that case derive a synthetic name.
-            name = None
-            ep_data = None
-            for k, v in entry.items():
-                if isinstance(v, dict):
-                    name = k
-                    ep_data = v
-                    break
-
-            if ep_data is None:
-                # Flat style: the entry dict IS the endpoint data; use first key as name.
-                name = next(iter(entry))
-                ep_data = entry
-                # Remove the name key if it has no dict value (it's just the name string)
-                ep_data = {
-                    k: v for k, v in entry.items() if k != name or isinstance(v, dict)
-                }
-                if not ep_data:
-                    ep_data = entry  # treat whole dict as data
-
+            name, ep_data = _endpoint_name_and_data(entry)
             name = name or "unnamed"
             path = f"{group_name}/{name}"
 
@@ -137,38 +167,26 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
             if not url:
                 return [], f"Endpoint '{path}' is missing 'url'"
 
-            method = (ep_data.get("method") or entry.get("method") or "POST").upper()
+            method = (
+                ep_data.get("method") or entry.get("method") or _DEFAULT_METHOD
+            ).upper()
             body = ep_data.get("body") or entry.get("body") or None
 
-            raw_headers = dict(ep_data.get("headers") or entry.get("headers") or {})
-            # Extract Content-Type from headers (case-insensitive)
-            content_type = "application/json"
-            ct_key = next((k for k in raw_headers if k.lower() == "content-type"), None)
-            if ct_key:
-                content_type = raw_headers.pop(ct_key)
+            raw_headers = ep_data.get("headers") or entry.get("headers") or {}
+            content_type, headers = _extract_content_type(raw_headers)
 
             # Step-level auth overrides group auth
-            step_auth = ep_data.get("auth") or entry.get("auth") or None
-            if step_auth and isinstance(step_auth, dict):
-                auth_type = (step_auth.get("type") or "none").lower()
-                if auth_type == "bearer":
-                    auth_raw = step_auth.get("token") or ""
-                elif auth_type == "basic":
-                    user = step_auth.get("user") or ""
-                    pw = step_auth.get("password") or ""
-                    auth_raw = f"{user}:{pw}" if (user or pw) else ""
-                else:
-                    auth_type = "none"
-                    auth_raw = ""
+            step_auth = ep_data.get("auth") or entry.get("auth")
+            if isinstance(step_auth, dict):
+                auth_type, auth_raw = _parse_auth_block(step_auth)
             else:
-                auth_type = group_auth_type
-                auth_raw = group_auth_raw
+                auth_type, auth_raw = group_auth_type, group_auth_raw
 
             on_error = (
-                ep_data.get("on_error") or entry.get("on_error") or "stop"
+                ep_data.get("on_error") or entry.get("on_error") or _ON_ERROR_STOP
             ).lower()
-            if on_error not in ("stop", "continue"):
-                on_error = "stop"
+            if on_error not in (_ON_ERROR_STOP, _ON_ERROR_CONTINUE):
+                on_error = _ON_ERROR_STOP
 
             steps.append(
                 WorkflowStep(
@@ -177,7 +195,7 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
                     method=method,
                     body=body,
                     content_type=content_type,
-                    headers=raw_headers,
+                    headers=headers,
                     auth_type=auth_type,
                     auth_raw=auth_raw,
                     on_error=on_error,
@@ -218,9 +236,9 @@ def _resolve_workflow_auth_headers(
     for step in steps:
         key = (step.auth_type, step.auth_raw)
         if key not in resolved:
-            if step.auth_type == "none":
+            if step.auth_type == _AUTH_NONE:
                 resolved[key] = None
-            elif step.auth_type == "bearer":
+            elif step.auth_type == _AUTH_BEARER:
                 token = resolve_token(
                     step.auth_raw or None, suspend=suspend, resume=resume
                 )
@@ -277,10 +295,10 @@ def _fire_workflow_step(
     )
 
     new_auth_header: str | None = None
-    if status == 401 and step.auth_type != "none":
+    if status == 401 and step.auth_type != _AUTH_NONE:
         if auth_refresh_fn is not None:
             new_auth_header = auth_refresh_fn(auth_header)
-        elif step.auth_type == "bearer":
+        elif step.auth_type == _AUTH_BEARER:
             refreshed = prompt_new_token(suspend=suspend, resume=resume)
             new_auth_header = f"Bearer {refreshed}"
         else:
