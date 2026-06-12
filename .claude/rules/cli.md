@@ -9,8 +9,8 @@ stdlib `argparse`, exposed as `bulk-post` via `[project.scripts]` (`bulk_post:ma
 - Stay dependency-light: prefer stdlib. Do not swap `argparse` for Click/Typer without explicit agreement.
 
 ## Exit codes
-- `0` = success. Non-zero = failure. argparse already exits `2` on a usage error — don't override that.
-- A run with some failed rows is still a completed run; reserve non-zero exit for "the tool could not do its job," not for individual row failures (those go to the retry file).
+- `0` = success. Non-zero = failure. argparse exits `2` on a usage error.
+- This tool exits **`1` when any row fails** (so CI/scripts can detect partial failures); individual failures are still written to the retry file. Setup/validation errors also exit `1` (raised internally as `_CliError`).
 
 ## Streams
 - Normal/result output → **stdout**. Progress bars, diagnostics, errors, debug stats → **stderr**. This keeps `bulk-post ... | other` pipelines clean.
