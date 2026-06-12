@@ -33,7 +33,6 @@ import io
 import os
 import pathlib
 import queue
-import re
 import signal
 import sys
 import threading
@@ -43,6 +42,9 @@ import urllib.request
 from collections.abc import Callable
 from typing import IO, Any, cast
 
+from .templating import (
+    PLACEHOLDER_RE as PLACEHOLDER_RE,
+)
 from .templating import (
     _validate_body_template as _validate_body_template,
 )
@@ -72,7 +74,6 @@ except ImportError:
     _yaml = None  # type: ignore[assignment]
 
 BAR_WIDTH = 40
-PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
 _CMD_PROMPT = "  cmd> "
 
 # ANSI colour helpers
