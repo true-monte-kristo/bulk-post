@@ -1191,7 +1191,9 @@ class TestParallelRun(unittest.TestCase):
             ),
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=mock_urlopen),
-            patch("bulk_post.auth.prompt_new_token", return_value="new-tok") as mock_prompt,
+            patch(
+                "bulk_post.auth.prompt_new_token", return_value="new-tok"
+            ) as mock_prompt,
             patch("builtins.print"),
         ):
             bulk_post._run()

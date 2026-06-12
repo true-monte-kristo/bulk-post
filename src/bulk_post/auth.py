@@ -7,7 +7,8 @@ import base64
 import os
 import sys
 from collections.abc import Callable
-from typing import Any
+
+from .state import _ParallelState
 
 
 def resolve_token(
@@ -112,7 +113,7 @@ def resolve_auth_header(
 
 def _make_auth_refresh_fn(
     args,
-    state: Any,
+    state: _ParallelState,
     suspend: Callable | None,
     resume: Callable | None,
 ) -> Callable:
@@ -122,7 +123,7 @@ def _make_auth_refresh_fn(
         with state.auth_lock:
             # Another thread already refreshed while we waited for the lock.
             if state.auth_header != old_auth_header:
-                return state.auth_header  # type: ignore[no-any-return]
+                return state.auth_header
             with state.output_lock:
                 if suspend:
                     suspend()
