@@ -2045,6 +2045,14 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
+    except BrokenPipeError:
+        # Downstream consumer (e.g. `| head`) closed the pipe. Exit cleanly
+        # without a traceback. Redirect stdout to devnull so interpreter
+        # shutdown doesn't re-raise on flush.
+        with contextlib.suppress(OSError):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(0)
 
 
 def _run() -> None:
