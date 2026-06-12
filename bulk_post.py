@@ -1186,9 +1186,7 @@ def _log_row(
         return False
 
 
-def _validate_placeholders(
-    args: argparse.Namespace, fieldnames: list | None
-) -> None:
+def _validate_placeholders(args: argparse.Namespace, fieldnames: list | None) -> None:
     header_val_placeholders: list = []
     for raw in args.header or []:
         if ": " not in raw:
@@ -2058,8 +2056,9 @@ def main() -> None:
 
 def _run() -> None:
     parser = argparse.ArgumentParser(description="Bulk HTTP requests from CSV rows")
-    parser.add_argument("--version", "-V", action="version",
-                        version=f"%(prog)s {_get_version()}")
+    parser.add_argument(
+        "--version", "-V", action="version", version=f"%(prog)s {_get_version()}"
+    )
     parser.add_argument(
         "--url",
         "-u",

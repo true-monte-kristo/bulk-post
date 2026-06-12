@@ -1714,7 +1714,9 @@ workflow:
 
         def fake_urlopen(req, timeout=None):
             call_count[0] += 1
-            if ("step-one" in req.full_url or "/1" in req.full_url) and call_count[0] == 1:
+            if ("step-one" in req.full_url or "/1" in req.full_url) and call_count[
+                0
+            ] == 1:
                 return self._mock_resp(500)
             return self._mock_resp(200)
 
@@ -1847,7 +1849,8 @@ workflow:
 
         stderr_buf = io.StringIO()
         with (
-            self.assertRaises(SystemExit) as ctx, patch(
+            self.assertRaises(SystemExit) as ctx,
+            patch(
                 "sys.argv",
                 [
                     "bp",
@@ -1952,7 +1955,10 @@ class TestResumeAfterDrain(unittest.TestCase):
 
 class TestVersionFlag(unittest.TestCase):
     def test_version_flag_prints_and_exits_zero(self):
-        with self.assertRaises(SystemExit) as ctx, patch("sys.argv", ["bulk-post", "--version"]):
+        with (
+            self.assertRaises(SystemExit) as ctx,
+            patch("sys.argv", ["bulk-post", "--version"]),
+        ):
             bulk_post._run()
         self.assertEqual(ctx.exception.code, 0)
 
