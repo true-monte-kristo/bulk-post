@@ -6,3 +6,6 @@ dist/
 __pycache__/
 *.pyc
 .venv/
+
+# Local test fixtures (not part of the repo)
+typicode-test-workflow.yaml
