@@ -536,11 +536,10 @@ class TestRun(unittest.TestCase):
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=err),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
         self.assertTrue(retry_path.exists())
         with open(retry_path) as f:
             rows = list(csv.DictReader(f))
@@ -575,11 +574,10 @@ class TestRun(unittest.TestCase):
             ),
             patch("sys.stdin.isatty", return_value=False),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
 
     def test_401_retries_with_new_token(self):
         csv_path = self._write_csv("data.csv", [{"id": "1"}])
@@ -622,10 +620,10 @@ class TestRun(unittest.TestCase):
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=err),
             patch("builtins.print"),
-            self.assertRaises(SystemExit),
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
+        self.assertEqual(code, 1)
         self.assertTrue(Path(custom_path).exists())
 
     def test_missing_csv_column_for_placeholder_exits(self):
@@ -635,11 +633,10 @@ class TestRun(unittest.TestCase):
             patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
             patch("sys.stdin.isatty", return_value=False),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
 
     def test_body_placeholder_substituted_per_row(self):
         csv_path = self._write_csv("data.csv", [{"id": "1"}, {"id": "2"}])
@@ -733,11 +730,10 @@ class TestRun(unittest.TestCase):
                 "urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)
             ),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
         self.assertEqual(calls, [])
 
     def test_invalid_xml_body_exits_before_any_request(self):
@@ -766,11 +762,10 @@ class TestRun(unittest.TestCase):
                 "urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)
             ),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
         self.assertEqual(calls, [])
 
     def test_default_content_type_is_json(self):
@@ -960,11 +955,10 @@ class TestRun(unittest.TestCase):
                 "urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)
             ),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
         self.assertEqual(calls, [])
 
     def test_header_placeholder_missing_from_csv_exits(self):
@@ -991,11 +985,10 @@ class TestRun(unittest.TestCase):
                 "urllib.request.urlopen", side_effect=lambda *a, **kw: calls.append(1)
             ),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
         self.assertEqual(calls, [])
 
     def test_no_auth_sends_no_authorization_header(self):
@@ -1150,11 +1143,10 @@ class TestParallelRun(unittest.TestCase):
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=err),
             patch("builtins.print"),
-            self.assertRaises(SystemExit) as ctx,
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
-        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(code, 1)
         self.assertTrue(retry_path.exists())
         with open(retry_path) as f:
             written_rows = list(csv.DictReader(f))
@@ -1739,10 +1731,10 @@ workflow:
             ),
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=fake_urlopen),
-            self.assertRaises(SystemExit),
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
+        self.assertEqual(code, 1)
         self.assertTrue(os.path.exists(retry_path))
         with open(retry_path, newline="") as f:
             reader = csv.DictReader(f)
@@ -1783,10 +1775,10 @@ workflow:
             ),
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=fake_urlopen),
-            self.assertRaises(SystemExit),
         ):
-            bulk_post._run()
+            code = bulk_post.main()
 
+        self.assertEqual(code, 1)
         self.assertEqual(len(calls), 2)
         self.assertTrue(any("/1/confirm" in u for u in calls))
 
@@ -1851,7 +1843,6 @@ workflow:
 
         stderr_buf = io.StringIO()
         with (
-            self.assertRaises(SystemExit) as ctx,
             patch(
                 "sys.argv",
                 [
@@ -1867,8 +1858,8 @@ workflow:
             patch("sys.stdin.isatty", return_value=False),
             patch("sys.stderr", stderr_buf),
         ):
-            bulk_post._run()
-        self.assertEqual(ctx.exception.code, 1)
+            code = bulk_post.main()
+        self.assertEqual(code, 1)
 
     def test_neither_url_nor_workflow_exits(self):
         csv_path = self._write_csv("rows", [{"id": "1"}])
@@ -1876,13 +1867,12 @@ workflow:
 
         stderr_buf = io.StringIO()
         with (
-            self.assertRaises(SystemExit) as ctx,
             patch("sys.argv", ["bp", "-c", csv_path]),
             patch("sys.stdin.isatty", return_value=False),
             patch("sys.stderr", stderr_buf),
         ):
-            bulk_post._run()
-        self.assertEqual(ctx.exception.code, 1)
+            code = bulk_post.main()
+        self.assertEqual(code, 1)
 
 
 class TestResumeAfterDrain(unittest.TestCase):
@@ -1966,6 +1956,16 @@ class TestVersionFlag(unittest.TestCase):
 
     def test_get_version_returns_string(self):
         self.assertIsInstance(bulk_post._get_version(), str)
+
+
+class TestMainExitCodes(unittest.TestCase):
+    def test_missing_url_and_workflow_returns_1(self):
+        with (
+            patch("sys.argv", ["bulk-post", "-c", "nonexistent.csv"]),
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            code = bulk_post.main()
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
