@@ -27,7 +27,6 @@ import base64
 import contextlib
 import csv
 import dataclasses
-import datetime
 import importlib.metadata
 import io
 import os
@@ -40,6 +39,15 @@ import time
 from collections.abc import Callable
 from typing import IO, Any, cast
 
+from .csvio import (
+    _open_log_file,
+    _open_retry_writer,
+    _skip_rows,
+    _write_failure_log,
+)
+from .csvio import (
+    count_csv_rows as count_csv_rows,
+)
 from .http import _mask_headers, http_request
 from .state import _ParallelState, _WorkflowParallelState
 from .templating import (
@@ -684,14 +692,6 @@ class _BottomBar:
 # ---------------------------------------------------------------------------
 
 
-def count_csv_rows(path: str) -> int:
-    try:
-        with open(path, newline="", encoding="utf-8") as f:
-            return sum(1 for _ in csv.DictReader(f))
-    except OSError:
-        return 0
-
-
 def print_progress(current: int, total: int) -> None:
     if total == 0:
         return
@@ -868,64 +868,6 @@ def _wait_for_resume() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _open_retry_writer(
-    retry_path: pathlib.Path, fieldnames: list
-) -> tuple[IO[str], Any]:
-    """Open the retry CSV and write its header. Returns (file, writer)."""
-    f = open(retry_path, "w", newline="", encoding="utf-8")  # noqa: SIM115  # caller owns lifecycle
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
-    writer.writeheader()
-    return f, writer
-
-
-def _open_log_file(log_path: pathlib.Path) -> IO[str]:
-    f = open(log_path, "a", encoding="utf-8")  # noqa: SIM115  # caller owns lifecycle
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    f.write(f"\n{'=' * 60}\nRun started {ts}\n{'=' * 60}\n")
-    f.flush()
-    return f
-
-
-def _write_failure_log(
-    log_file: IO[str],
-    kind: str,
-    line_num: int,
-    method: str,
-    url: str,
-    req_body: str | None,
-    req_headers: dict,
-    status: int | None,
-    resp_body: str,
-    resp_headers: dict,
-    elapsed: float,
-) -> None:
-    ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    parts = [f"--- {kind}  row {line_num}  {ts} ---"]
-    if url:
-        parts.append(f"Method:   {method}")
-        parts.append(f"URL:      {url}")
-        if req_headers:
-            parts.append("Req-Headers:")
-            for k, v in _mask_headers(req_headers).items():
-                parts.append(f"  {k}: {v}")
-        if req_body:
-            parts.append(f"Body:     {req_body}")
-        status_str = str(status) if status is not None else "ERR"
-        parts.append(f"Status:   {status_str}")
-        parts.append(f"Elapsed:  {elapsed * 1000:.0f} ms")
-        if resp_headers:
-            parts.append("Resp-Headers:")
-            for k, v in resp_headers.items():
-                parts.append(f"  {k}: {v}")
-        if resp_body:
-            parts.append(f"Response: {resp_body.strip()[:1000]}")
-    else:
-        parts.append(f"Error:    {resp_body}")
-    parts.append("")
-    log_file.write("\n".join(parts) + "\n")
-    log_file.flush()
-
-
 def _make_auth_refresh_fn(
     args,
     state: "_ParallelState",
@@ -1061,13 +1003,6 @@ def _log_row(
             f"{_RED}{thread_tag}[FAIL]  {label}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}",
         )
         return False
-
-
-def _skip_rows(reader: csv.DictReader, count: int, bar: _BottomBar | None) -> None:
-    if count:
-        _out(bar, f"Skipping {count} rows, starting from row {count + 1}.")
-        for _ in range(count):
-            next(reader, None)
 
 
 def _handle_cmd_in_loop(
