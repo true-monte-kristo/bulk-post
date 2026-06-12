@@ -74,12 +74,12 @@ class _BottomBar:
     """
 
     def __init__(self, debug_mode: bool = False) -> None:
-        self._q: queue.Queue[str] = queue.Queue()
+        self._cmd_queue: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._buf = ""
         self._nav_idx: int = -1  # -1 = free input; 0..len(_COMMANDS)-1 = navigating
         self._saved_buf: str = ""  # buffer snapshot taken when entering navigation
-        self._h = 0
+        self._height = 0
         self._scroll_end = 0  # last row of scroll region; set in start()
         self._debug_mode = debug_mode
         self._active = False
@@ -100,17 +100,17 @@ class _BottomBar:
         """
         import shutil
 
-        self._h = shutil.get_terminal_size((80, 24)).lines
-        if self._h < (6 if self._debug_mode else 5):
+        self._height = shutil.get_terminal_size((80, 24)).lines
+        if self._height < (6 if self._debug_mode else 5):
             return False
         try:
             self._old_settings = termios.tcgetattr(sys.stdin.fileno())
         except termios.error:
             return False
-        self._scroll_end = self._h - (3 if self._debug_mode else 2)
+        self._scroll_end = self._height - (3 if self._debug_mode else 2)
         with self._stdout_lock:
             sys.stdout.write(
-                f"\033[1;{self._scroll_end}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}"
+                f"\033[1;{self._scroll_end}r\033[{self._height};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}"
             )
             sys.stdout.flush()
         self._active = True
@@ -130,9 +130,11 @@ class _BottomBar:
                 )
         # Reset scroll region and clear bottom rows
         if self._debug_mode:
-            clear = f"\033[r\033[{self._h - 2};1H\033[2K\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K"
+            clear = f"\033[r\033[{self._height - 2};1H\033[2K\033[{self._height - 1};1H\033[2K\033[{self._height};1H\033[2K"
         else:
-            clear = f"\033[r\033[{self._h - 1};1H\033[2K\033[{self._h};1H\033[2K"
+            clear = (
+                f"\033[r\033[{self._height - 1};1H\033[2K\033[{self._height};1H\033[2K"
+            )
         with self._stdout_lock:
             sys.stdout.write(clear)
             sys.stdout.flush()
@@ -172,7 +174,7 @@ class _BottomBar:
         with self._stdout_lock:
             sys.stdout.write(
                 f"\033[{self._scroll_end};1H\n\r{text}{_RESET}\033[K"
-                f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
+                f"\033[{self._height};{len(_CMD_PROMPT) + len(buf) + 1}H"
             )
             sys.stdout.flush()
 
@@ -186,8 +188,8 @@ class _BottomBar:
             buf = self._buf
         with self._stdout_lock:
             sys.stdout.write(
-                f"\033[{self._h - 1};1H\033[2K{line}"
-                f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
+                f"\033[{self._height - 1};1H\033[2K{line}"
+                f"\033[{self._height};{len(_CMD_PROMPT) + len(buf) + 1}H"
             )
             sys.stdout.flush()
 
@@ -199,15 +201,15 @@ class _BottomBar:
             buf = self._buf
         with self._stdout_lock:
             sys.stdout.write(
-                f"\033[{self._h - 2};1H\033[2K{_GREY}{text}{_RESET}"
-                f"\033[{self._h};{len(_CMD_PROMPT) + len(buf) + 1}H"
+                f"\033[{self._height - 2};1H\033[2K{_GREY}{text}{_RESET}"
+                f"\033[{self._height};{len(_CMD_PROMPT) + len(buf) + 1}H"
             )
             sys.stdout.flush()
 
     def poll(self) -> str | None:
         """Return the next command typed into the bar, or None if none is pending."""
         try:
-            return self._q.get_nowait()
+            return self._cmd_queue.get_nowait()
         except queue.Empty:
             return None
 
@@ -234,7 +236,7 @@ class _BottomBar:
             with contextlib.suppress(Exception):
                 self._redraw_cmd()
             if cmd:
-                self._q.put(cmd)
+                self._cmd_queue.put(cmd)
         elif ch == "\x03":  # Ctrl+C → raise SIGINT on main thread
             os.kill(os.getpid(), signal.SIGINT)
         elif ch == "\x1b":  # escape sequence (arrow keys, etc.)
@@ -267,8 +269,8 @@ class _BottomBar:
         raw: io.BufferedReader = cast(io.BufferedReader, sys.stdin.buffer)
 
         def _next_available() -> bool:
-            pyb = getattr(raw, "_read_buf", None)
-            if pyb is not None and len(pyb) > 0:
+            pending = getattr(raw, "_read_buf", None)
+            if pending is not None and len(pending) > 0:
                 return True
             r, _, _ = _select_mod.select([raw], [], [], 0.05)
             return bool(r)
@@ -352,8 +354,8 @@ class _BottomBar:
         cursor_col = len(_CMD_PROMPT) + len(buf) + 1
         with self._stdout_lock:
             sys.stdout.write(
-                f"\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}{typed}{ghost}"
-                f"\033[{self._h};{cursor_col}H"
+                f"\033[{self._height};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}{typed}{ghost}"
+                f"\033[{self._height};{cursor_col}H"
             )
             sys.stdout.flush()
 

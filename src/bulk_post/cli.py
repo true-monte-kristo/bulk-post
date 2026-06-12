@@ -264,9 +264,9 @@ def _run(argv: list[str] | None = None) -> int:
 
     bar: _BottomBar | None = None
     if sys.stdin.isatty() and _HAS_TERMIOS:
-        b = _BottomBar(debug_mode=args.debug and args.parallel)
-        if b.start():
-            bar = b
+        bottom_bar = _BottomBar(debug_mode=args.debug and args.parallel)
+        if bottom_bar.start():
+            bar = bottom_bar
 
     suspend = bar.pause if bar else None
     resume = bar.resume if bar else None

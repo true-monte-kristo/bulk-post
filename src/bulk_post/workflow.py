@@ -71,8 +71,8 @@ def _parse_auth_block(auth: dict | None) -> tuple[str, str]:
         return _AUTH_BEARER, auth.get("token") or ""
     if auth_type == _AUTH_BASIC:
         user = auth.get("user") or ""
-        pw = auth.get("password") or ""
-        return _AUTH_BASIC, f"{user}:{pw}" if (user or pw) else ""
+        password = auth.get("password") or ""
+        return _AUTH_BASIC, f"{user}:{password}" if (user or password) else ""
     return _AUTH_NONE, ""
 
 
@@ -132,14 +132,14 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
     if not isinstance(doc, dict) or "workflow" not in doc:
         return [], "Workflow file must have a top-level 'workflow' key"
 
-    wf = doc["workflow"]
-    if not isinstance(wf, dict):
+    workflow_def = doc["workflow"]
+    if not isinstance(workflow_def, dict):
         return [], "'workflow' must be a mapping"
 
     steps: list = []
     seen_paths: set = set()
 
-    for group_name, group_data in wf.items():
+    for group_name, group_data in workflow_def.items():
         if group_name == "description":
             continue
         if not isinstance(group_data, dict):

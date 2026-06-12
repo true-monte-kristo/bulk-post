@@ -82,9 +82,9 @@ def _fire(
         req_body, err = substitute(cast(str, args.body), row)
         if err:
             return None, err, 0.0, url, None, None, {}, {}
-        ct = args.content_type
+        content_type = args.content_type
     else:
-        ct = "application/json"
+        content_type = "application/json"
 
     extra_headers: dict = {}
     for raw in args.header or []:
@@ -95,7 +95,13 @@ def _fire(
         extra_headers[name] = val
 
     status, body, elapsed, req_headers, resp_headers = http_request(
-        url, auth_header, args.method, req_body, args.timeout, ct, extra_headers
+        url,
+        auth_header,
+        args.method,
+        req_body,
+        args.timeout,
+        content_type,
+        extra_headers,
     )
 
     new_auth_header: str | None = None
@@ -109,7 +115,13 @@ def _fire(
             refreshed = prompt_new_basic_creds(suspend=suspend, resume=resume)
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
         status, body, elapsed, req_headers, resp_headers = http_request(
-            url, new_auth_header, args.method, req_body, args.timeout, ct, extra_headers
+            url,
+            new_auth_header,
+            args.method,
+            req_body,
+            args.timeout,
+            content_type,
+            extra_headers,
         )
 
     return (
@@ -464,24 +476,24 @@ def _run_parallel_main_loop(
 
             if _exiting or _pausing:
                 with state.lock:
-                    n = state.in_flight
-                if n != _last_inflight_n:
-                    _last_inflight_n = n
-                    word = "request" if n == 1 else "requests"
+                    n_in_flight = state.in_flight
+                if n_in_flight != _last_inflight_n:
+                    _last_inflight_n = n_in_flight
+                    word = "request" if n_in_flight == 1 else "requests"
                     with state.output_lock:
                         if _exiting:
-                            if n > 0:
+                            if n_in_flight > 0:
                                 _out(
                                     bar,
-                                    f"{_GREY}[EXIT]  Waiting for {n} in-flight {word} to finish...{_RESET}",
+                                    f"{_GREY}[EXIT]  Waiting for {n_in_flight} in-flight {word} to finish...{_RESET}",
                                 )
                             else:
                                 _out(bar, f"{_GREY}[EXIT]  Stopping...{_RESET}")
                         else:
-                            if n > 0:
+                            if n_in_flight > 0:
                                 _out(
                                     bar,
-                                    f"[PAUSING]  Waiting for {n} in-flight {word} to finish...",
+                                    f"[PAUSING]  Waiting for {n_in_flight} in-flight {word} to finish...",
                                 )
                             else:
                                 # Stay in the paused state until the user explicitly
