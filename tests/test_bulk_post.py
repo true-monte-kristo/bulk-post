@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import bulk_post
 
-
 # ---------------------------------------------------------------------------
 # _get_suggestion
 # ---------------------------------------------------------------------------
@@ -100,7 +99,7 @@ class TestSubstitute(unittest.TestCase):
 
 class TestCountCsvRows(unittest.TestCase):
     def _tmp_csv(self, content):
-        f = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)
+        f = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False)  # noqa: SIM115  # NamedTemporaryFile, not open()
         f.write(content)
         f.close()
         return f.name
@@ -1270,10 +1269,10 @@ class TestParallelRun(unittest.TestCase):
         ):
             bulk_post._run()
 
-        row_lines = [l for l in printed if "[OK]" in l]
+        row_lines = [line for line in printed if "[OK]" in line]
         self.assertTrue(row_lines, "expected at least one [OK] line")
         self.assertTrue(
-            any("[worker-" in l for l in row_lines),
+            any("[worker-" in line for line in row_lines),
             f"expected '[worker-N]' prefix in output; got: {row_lines}",
         )
 
@@ -1379,7 +1378,7 @@ class TestParallelRun(unittest.TestCase):
 
 class TestParseWorkflow(unittest.TestCase):
     def _write_yaml(self, name, content):
-        tmp = tempfile.NamedTemporaryFile(
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115  # NamedTemporaryFile, not open()
             mode="w", suffix=".yaml", delete=False, prefix=name
         )
         tmp.write(content)
@@ -1624,7 +1623,7 @@ workflow:
 
 class TestWorkflowRun(unittest.TestCase):
     def _write_csv(self, name, rows):
-        tmp = tempfile.NamedTemporaryFile(
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115  # NamedTemporaryFile, not open()
             mode="w", suffix=".csv", delete=False, prefix=name, newline=""
         )
         if rows:
@@ -1636,7 +1635,7 @@ class TestWorkflowRun(unittest.TestCase):
         return tmp.name
 
     def _write_yaml(self, name, content):
-        tmp = tempfile.NamedTemporaryFile(
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115  # NamedTemporaryFile, not open()
             mode="w", suffix=".yaml", delete=False, prefix=name
         )
         tmp.write(content)
@@ -1715,7 +1714,7 @@ workflow:
 
         def fake_urlopen(req, timeout=None):
             call_count[0] += 1
-            if "step-one" in req.full_url or "/1" in req.full_url:
+            if "step-one" in req.full_url or "/1" in req.full_url:  # noqa: SIM102  # combining with `and` changes semantics: outer or-branch has no else
                 if call_count[0] == 1:
                     return self._mock_resp(500)
             return self._mock_resp(200)
@@ -1771,7 +1770,7 @@ workflow:
 
         def fake_urlopen(req, timeout=None):
             calls.append(req.full_url)
-            if "/1" == req.full_url.split("example.com")[1]:
+            if req.full_url.split("example.com")[1] == "/1":
                 return self._mock_resp(500)
             return self._mock_resp(200)
 
@@ -1825,7 +1824,7 @@ workflow:
         ):
             bulk_post._run()
 
-        urls = [u for u in calls]
+        urls = list(calls)
         self.assertFalse(any("/one" in u for u in urls), "step-one should be skipped")
         self.assertTrue(any("/two" in u for u in urls), "step-two should be executed")
         self.assertTrue(
@@ -1848,24 +1847,23 @@ workflow:
         import io
 
         stderr_buf = io.StringIO()
-        with self.assertRaises(SystemExit) as ctx:
-            with (
-                patch(
-                    "sys.argv",
-                    [
-                        "bp",
-                        "-u",
-                        "https://api.example.com/{{id}}",
-                        "--workflow",
-                        wf_path,
-                        "-c",
-                        csv_path,
-                    ],
-                ),
-                patch("sys.stdin.isatty", return_value=False),
-                patch("sys.stderr", stderr_buf),
-            ):
-                bulk_post._run()
+        with (
+            self.assertRaises(SystemExit) as ctx, patch(
+                "sys.argv",
+                [
+                    "bp",
+                    "-u",
+                    "https://api.example.com/{{id}}",
+                    "--workflow",
+                    wf_path,
+                    "-c",
+                    csv_path,
+                ],
+            ),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("sys.stderr", stderr_buf),
+        ):
+            bulk_post._run()
         self.assertEqual(ctx.exception.code, 1)
 
     def test_neither_url_nor_workflow_exits(self):
@@ -1873,13 +1871,13 @@ workflow:
         import io
 
         stderr_buf = io.StringIO()
-        with self.assertRaises(SystemExit) as ctx:
-            with (
-                patch("sys.argv", ["bp", "-c", csv_path]),
-                patch("sys.stdin.isatty", return_value=False),
-                patch("sys.stderr", stderr_buf),
-            ):
-                bulk_post._run()
+        with (
+            self.assertRaises(SystemExit) as ctx,
+            patch("sys.argv", ["bp", "-c", csv_path]),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("sys.stderr", stderr_buf),
+        ):
+            bulk_post._run()
         self.assertEqual(ctx.exception.code, 1)
 
 
