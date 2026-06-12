@@ -48,7 +48,7 @@ try:
     import select as _select_mod
 
     _HAS_TERMIOS = True
-    _HAS_SELECT = hasattr(_select_mod, 'select')
+    _HAS_SELECT = hasattr(_select_mod, "select")
 except ImportError:
     _HAS_TERMIOS = False
     _HAS_SELECT = False
@@ -56,6 +56,7 @@ except ImportError:
 
 try:
     import yaml as _yaml
+
     _HAS_YAML = True
 except ImportError:
     _HAS_YAML = False
@@ -88,17 +89,18 @@ _WORKFLOW_STEP_COL = "_bulk_post_step"
 # Workflow data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass
 class WorkflowStep:
-    path: str           # "groupA/call-example-api"
+    path: str  # "groupA/call-example-api"
     url: str
     method: str
     body: Optional[str]
     content_type: str
-    headers: dict       # without Content-Type
-    auth_type: str      # "bearer", "basic", "none"
-    auth_raw: str       # raw credential: token or user:pass
-    on_error: str       # "stop" or "continue"
+    headers: dict  # without Content-Type
+    auth_type: str  # "bearer", "basic", "none"
+    auth_raw: str  # raw credential: token or user:pass
+    on_error: str  # "stop" or "continue"
 
 
 def parse_workflow(yaml_path: str) -> Tuple[list, Optional[str]]:
@@ -170,7 +172,9 @@ def parse_workflow(yaml_path: str) -> Tuple[list, Optional[str]]:
                 name = next(iter(entry))
                 ep_data = entry
                 # Remove the name key if it has no dict value (it's just the name string)
-                ep_data = {k: v for k, v in entry.items() if k != name or isinstance(v, dict)}
+                ep_data = {
+                    k: v for k, v in entry.items() if k != name or isinstance(v, dict)
+                }
                 if not ep_data:
                     ep_data = entry  # treat whole dict as data
 
@@ -216,21 +220,25 @@ def parse_workflow(yaml_path: str) -> Tuple[list, Optional[str]]:
                 auth_type = group_auth_type
                 auth_raw = group_auth_raw
 
-            on_error = (ep_data.get("on_error") or entry.get("on_error") or "stop").lower()
+            on_error = (
+                ep_data.get("on_error") or entry.get("on_error") or "stop"
+            ).lower()
             if on_error not in ("stop", "continue"):
                 on_error = "stop"
 
-            steps.append(WorkflowStep(
-                path=path,
-                url=url,
-                method=method,
-                body=body,
-                content_type=content_type,
-                headers=raw_headers,
-                auth_type=auth_type,
-                auth_raw=auth_raw,
-                on_error=on_error,
-            ))
+            steps.append(
+                WorkflowStep(
+                    path=path,
+                    url=url,
+                    method=method,
+                    body=body,
+                    content_type=content_type,
+                    headers=raw_headers,
+                    auth_type=auth_type,
+                    auth_raw=auth_raw,
+                    on_error=on_error,
+                )
+            )
 
     if not steps:
         return [], "Workflow defines no endpoints"
@@ -252,16 +260,16 @@ def _validate_workflow_placeholders(steps: list, fieldnames: list) -> Optional[s
 
 
 def _resolve_workflow_auth_headers(
-        steps: list,
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    steps: list,
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> Tuple[dict, Optional[str]]:
     """
     Resolve auth for all workflow steps. Returns (auth_headers_by_path, error_or_None).
     Deduplicates: same (auth_type, auth_raw) prompts only once.
     """
     resolved: dict = {}  # (auth_type, auth_raw) -> auth_header string or None
-    result: dict = {}    # step.path -> auth_header string or None
+    result: dict = {}  # step.path -> auth_header string or None
 
     for step in steps:
         key = (step.auth_type, step.auth_raw)
@@ -269,10 +277,14 @@ def _resolve_workflow_auth_headers(
             if step.auth_type == "none":
                 resolved[key] = None
             elif step.auth_type == "bearer":
-                token = resolve_token(step.auth_raw or None, suspend=suspend, resume=resume)
+                token = resolve_token(
+                    step.auth_raw or None, suspend=suspend, resume=resume
+                )
                 resolved[key] = f"Bearer {token}"
             else:
-                creds = resolve_basic_creds(step.auth_raw or None, suspend=suspend, resume=resume)
+                creds = resolve_basic_creds(
+                    step.auth_raw or None, suspend=suspend, resume=resume
+                )
                 resolved[key] = f"Basic {base64.b64encode(creds.encode()).decode()}"
         result[step.path] = resolved[key]
 
@@ -280,13 +292,13 @@ def _resolve_workflow_auth_headers(
 
 
 def _fire_workflow_step(
-        step: WorkflowStep,
-        row: dict,
-        auth_header: Optional[str],
-        timeout: int,
-        auth_refresh_fn: Optional[Callable] = None,
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    step: WorkflowStep,
+    row: dict,
+    auth_header: Optional[str],
+    timeout: int,
+    auth_refresh_fn: Optional[Callable] = None,
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> Tuple[Optional[int], str, float, str, Optional[str], Optional[str], dict, dict]:
     """
     Fire a single workflow step for one CSV row.
@@ -311,7 +323,14 @@ def _fire_workflow_step(
         extra_headers[k] = val
 
     status, body, elapsed, req_headers, resp_headers = http_request(
-        url, auth_header, step.method, req_body, timeout, step.content_type, extra_headers)
+        url,
+        auth_header,
+        step.method,
+        req_body,
+        timeout,
+        step.content_type,
+        extra_headers,
+    )
 
     new_auth_header: Optional[str] = None
     if status == 401 and step.auth_type != "none":
@@ -325,9 +344,25 @@ def _fire_workflow_step(
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
         if new_auth_header:
             status, body, elapsed, req_headers, resp_headers = http_request(
-                url, new_auth_header, step.method, req_body, timeout, step.content_type, extra_headers)
+                url,
+                new_auth_header,
+                step.method,
+                req_body,
+                timeout,
+                step.content_type,
+                extra_headers,
+            )
 
-    return status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers
+    return (
+        status,
+        body,
+        elapsed,
+        url,
+        new_auth_header,
+        req_body,
+        req_headers,
+        resp_headers,
+    )
 
 
 def _get_suggestion(buf: str) -> str:
@@ -336,13 +371,17 @@ def _get_suggestion(buf: str) -> str:
         return ""
     for cmd in _COMMANDS:
         if cmd.startswith(buf) and cmd != buf:
-            return cmd[len(buf):]
+            return cmd[len(buf) :]
     return ""
 
 
 def _render_bar(current: int, total: int) -> str:
     filled = int(BAR_WIDTH * current / total)
-    return "=" * filled + (">" if filled < BAR_WIDTH else "=") + " " * max(0, BAR_WIDTH - filled - 1)
+    return (
+        "=" * filled
+        + (">" if filled < BAR_WIDTH else "=")
+        + " " * max(0, BAR_WIDTH - filled - 1)
+    )
 
 
 class _BottomBar:
@@ -375,6 +414,7 @@ class _BottomBar:
 
     def start(self) -> bool:
         import shutil
+
         self._h = shutil.get_terminal_size((80, 24)).lines
         if self._h < (6 if self._debug_mode else 5):
             return False
@@ -384,7 +424,9 @@ class _BottomBar:
             return False
         self._scroll_end = self._h - (3 if self._debug_mode else 2)
         with self._stdout_lock:
-            sys.stdout.write(f"\033[1;{self._scroll_end}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}")
+            sys.stdout.write(
+                f"\033[1;{self._scroll_end}r\033[{self._h};1H\033[2K{_GREY}{_CMD_PROMPT}{_RESET}"
+            )
             sys.stdout.flush()
         self._active = True
         self._thread = threading.Thread(target=self._input_loop, daemon=True)
@@ -397,7 +439,9 @@ class _BottomBar:
             self._thread.join(timeout=0.2)
         if self._old_settings is not None:
             try:
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings)
+                termios.tcsetattr(
+                    sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings
+                )
             except termios.error:
                 pass
         # Reset scroll region and clear bottom rows
@@ -487,7 +531,9 @@ class _BottomBar:
         """Exit raw mode, signal the main thread, wait to resume, re-enter raw mode."""
         if self._old_settings is not None:
             try:
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings)
+                termios.tcsetattr(
+                    sys.stdin.fileno(), termios.TCSADRAIN, self._old_settings
+                )
             except termios.error:
                 pass
         self._paused_ack.set()
@@ -630,21 +676,22 @@ class _BottomBar:
 # Parallel execution state
 # ---------------------------------------------------------------------------
 
+
 class _ParallelState:
     """Shared mutable state for parallel worker threads."""
 
     def __init__(self, auth_header: Optional[str]) -> None:
-        self.lock = threading.Lock()         # protects counters, retry_writer, log_file
-        self.auth_lock = threading.Lock()    # serialises 401 interactive prompts
+        self.lock = threading.Lock()  # protects counters, retry_writer, log_file
+        self.auth_lock = threading.Lock()  # serialises 401 interactive prompts
         self.output_lock = threading.Lock()  # serialises all stdout / bar writes
         self.auth_header: Optional[str] = auth_header
         self.ok = 0
         self.failed = 0
         self.processed = 0
-        self.in_flight = 0                   # rows currently executing an HTTP request
+        self.in_flight = 0  # rows currently executing an HTTP request
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
-        self.pause_event.set()               # set = running; clear = paused
+        self.pause_event.set()  # set = running; clear = paused
 
 
 class _WorkflowParallelState:
@@ -652,11 +699,13 @@ class _WorkflowParallelState:
 
     def __init__(self, auth_headers: dict) -> None:
         self.lock = threading.Lock()
-        self.auth_lock = threading.Lock()    # one thread at a time refreshes any credential
+        self.auth_lock = (
+            threading.Lock()
+        )  # one thread at a time refreshes any credential
         self.output_lock = threading.Lock()
         self.auth_headers: dict = dict(auth_headers)  # step.path -> Optional[str]
-        self.ok = 0           # rows where all steps succeeded
-        self.failed = 0       # rows where at least one step failed
+        self.ok = 0  # rows where all steps succeeded
+        self.failed = 0  # rows where at least one step failed
         self.processed = 0
         self.in_flight = 0
         self.stop_event = threading.Event()
@@ -667,6 +716,7 @@ class _WorkflowParallelState:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def count_csv_rows(path: str) -> int:
     try:
@@ -699,9 +749,9 @@ def _progress(bar: Optional[_BottomBar], current: int, total: int) -> None:
 
 
 def resolve_token(
-        flag_value: Optional[str],
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    flag_value: Optional[str],
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> str:
     if flag_value:
         return flag_value
@@ -723,8 +773,8 @@ def resolve_token(
 
 
 def prompt_new_token(
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> str:
     if suspend:
         suspend()
@@ -742,9 +792,9 @@ def prompt_new_token(
 
 
 def resolve_basic_creds(
-        flag_value: Optional[str],
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    flag_value: Optional[str],
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> str:
     if flag_value:
         return flag_value
@@ -766,8 +816,8 @@ def resolve_basic_creds(
 
 
 def prompt_new_basic_creds(
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> str:
     if suspend:
         suspend()
@@ -785,9 +835,9 @@ def prompt_new_basic_creds(
 
 
 def resolve_auth_header(
-        args: argparse.Namespace,
-        suspend: Optional[Callable] = None,
-        resume: Optional[Callable] = None,
+    args: argparse.Namespace,
+    suspend: Optional[Callable] = None,
+    resume: Optional[Callable] = None,
 ) -> Optional[str]:
     if args.auth_type == "none":
         return None
@@ -805,9 +855,15 @@ def substitute(template: str, row: dict) -> Tuple[str, Optional[str]]:
     return PLACEHOLDER_RE.sub(lambda m: row[m.group(1)], template), None
 
 
-def http_request(url: str, auth_header: Optional[str], method: str, body: Optional[str], timeout: int = 30,
-                 content_type: str = "application/json",
-                 extra_headers: Optional[dict] = None) -> Tuple[Optional[int], str, float, dict, dict]:
+def http_request(
+    url: str,
+    auth_header: Optional[str],
+    method: str,
+    body: Optional[str],
+    timeout: int = 30,
+    content_type: str = "application/json",
+    extra_headers: Optional[dict] = None,
+) -> Tuple[Optional[int], str, float, dict, dict]:
     """Returns (status_or_None, response_body, elapsed_seconds, req_headers, resp_headers)."""
     encoded_body = body.encode("utf-8") if body else None
     req_headers: dict = {}
@@ -817,28 +873,65 @@ def http_request(url: str, auth_header: Optional[str], method: str, body: Option
         req_headers["Authorization"] = auth_header
     if encoded_body:
         req_headers["Content-Type"] = content_type
-    req = urllib.request.Request(url, data=encoded_body, method=method, headers=req_headers)
+    req = urllib.request.Request(
+        url, data=encoded_body, method=method, headers=req_headers
+    )
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             response_body = resp.read().decode("utf-8", errors="replace")
             resp_headers = {k: v for k, v in resp.headers.items()}
-            return resp.status, response_body, time.monotonic() - t0, req_headers, resp_headers
+            return (
+                resp.status,
+                response_body,
+                time.monotonic() - t0,
+                req_headers,
+                resp_headers,
+            )
     except urllib.error.HTTPError as e:
         resp_headers = {k: v for k, v in e.headers.items()} if e.headers else {}
-        return e.code, e.read().decode("utf-8", errors="replace"), time.monotonic() - t0, req_headers, resp_headers
+        return (
+            e.code,
+            e.read().decode("utf-8", errors="replace"),
+            time.monotonic() - t0,
+            req_headers,
+            resp_headers,
+        )
     except urllib.error.URLError as e:
-        return None, f"Connection error: {e.reason}", time.monotonic() - t0, req_headers, {}
+        return (
+            None,
+            f"Connection error: {e.reason}",
+            time.monotonic() - t0,
+            req_headers,
+            {},
+        )
     except TimeoutError:
-        return None, f"Request timed out ({timeout}s)", time.monotonic() - t0, req_headers, {}
+        return (
+            None,
+            f"Request timed out ({timeout}s)",
+            time.monotonic() - t0,
+            req_headers,
+            {},
+        )
 
 
 def _mask_headers(headers: dict) -> dict:
-    return {k: "*****" if k.lower() == "authorization" else v for k, v in headers.items()}
+    return {
+        k: "*****" if k.lower() == "authorization" else v for k, v in headers.items()
+    }
 
 
-def print_verbose(bar: Optional[_BottomBar], method: str, url: str, req_body: Optional[str], req_headers: dict,
-                  status: Optional[int], resp_body: str, resp_headers: dict, elapsed: float) -> None:
+def print_verbose(
+    bar: Optional[_BottomBar],
+    method: str,
+    url: str,
+    req_body: Optional[str],
+    req_headers: dict,
+    status: Optional[int],
+    resp_body: str,
+    resp_headers: dict,
+    elapsed: float,
+) -> None:
     _out(bar, f"  > {method} {url}")
     for k, v in _mask_headers(req_headers).items():
         _out(bar, f"  > {k}: {v}")
@@ -881,7 +974,10 @@ def _wait_for_resume() -> bool:
 # _run helpers
 # ---------------------------------------------------------------------------
 
-def _open_retry_writer(retry_path: pathlib.Path, fieldnames: list) -> Tuple[IO[str], Any]:
+
+def _open_retry_writer(
+    retry_path: pathlib.Path, fieldnames: list
+) -> Tuple[IO[str], Any]:
     """Open the retry CSV and write its header. Returns (file, writer)."""
     f = open(retry_path, "w", newline="", encoding="utf-8")
     writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -898,17 +994,17 @@ def _open_log_file(log_path: pathlib.Path) -> IO[str]:
 
 
 def _write_failure_log(
-        log_file: IO[str],
-        kind: str,
-        line_num: int,
-        method: str,
-        url: str,
-        req_body: Optional[str],
-        req_headers: dict,
-        status: Optional[int],
-        resp_body: str,
-        resp_headers: dict,
-        elapsed: float,
+    log_file: IO[str],
+    kind: str,
+    line_num: int,
+    method: str,
+    url: str,
+    req_body: Optional[str],
+    req_headers: dict,
+    status: Optional[int],
+    resp_body: str,
+    resp_headers: dict,
+    elapsed: float,
 ) -> None:
     ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     parts = [f"--- {kind}  row {line_num}  {ts} ---"]
@@ -954,12 +1050,13 @@ def _validate_body_template(template: str, content_type: str) -> Optional[str]:
 
 
 def _make_auth_refresh_fn(
-        args,
-        state: "_ParallelState",
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
+    args,
+    state: "_ParallelState",
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
 ) -> Callable:
     """Return a thread-safe 401-refresh closure for parallel workers."""
+
     def refresh(old_auth_header: Optional[str]) -> Optional[str]:
         with state.auth_lock:
             # Another thread already refreshed while we waited for the lock.
@@ -980,16 +1077,17 @@ def _make_auth_refresh_fn(
                         resume()
             state.auth_header = new
             return new
+
     return refresh
 
 
 def _fire(
-        row: dict,
-        args,
-        auth_header: Optional[str],
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
-        auth_refresh_fn: Optional[Callable] = None,
+    row: dict,
+    args,
+    auth_header: Optional[str],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    auth_refresh_fn: Optional[Callable] = None,
 ) -> Tuple[Optional[int], str, float, str, Optional[str], Optional[str], dict, dict]:
     """
     Substitute placeholders, fire the request (with one 401 retry), return
@@ -1010,7 +1108,7 @@ def _fire(
         ct = "application/json"
 
     extra_headers: dict = {}
-    for raw in (args.header or []):
+    for raw in args.header or []:
         name, _, val_tmpl = raw.partition(": ")
         val, herr = substitute(val_tmpl, row)
         if herr:
@@ -1018,7 +1116,8 @@ def _fire(
         extra_headers[name] = val
 
     status, body, elapsed, req_headers, resp_headers = http_request(
-        url, auth_header, args.method, req_body, args.timeout, ct, extra_headers)
+        url, auth_header, args.method, req_body, args.timeout, ct, extra_headers
+    )
 
     new_auth_header: Optional[str] = None
     if status == 401 and args.auth_type != "none":
@@ -1031,49 +1130,72 @@ def _fire(
             refreshed = prompt_new_basic_creds(suspend=suspend, resume=resume)
             new_auth_header = f"Basic {base64.b64encode(refreshed.encode()).decode()}"
         status, body, elapsed, req_headers, resp_headers = http_request(
-            url, new_auth_header, args.method, req_body, args.timeout, ct, extra_headers)
+            url, new_auth_header, args.method, req_body, args.timeout, ct, extra_headers
+        )
 
-    return status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers
+    return (
+        status,
+        body,
+        elapsed,
+        url,
+        new_auth_header,
+        req_body,
+        req_headers,
+        resp_headers,
+    )
 
 
 def _log_row(
-        bar: Optional[_BottomBar],
-        args,
-        line_num: int,
-        status: Optional[int],
-        body: str,
-        elapsed: float,
-        url: str,
-        req_body: Optional[str],
-        req_headers: dict,
-        resp_headers: dict,
-        thread_tag: str = "",
-        method_override: Optional[str] = None,
-        row_label: Optional[str] = None,
+    bar: Optional[_BottomBar],
+    args,
+    line_num: int,
+    status: Optional[int],
+    body: str,
+    elapsed: float,
+    url: str,
+    req_body: Optional[str],
+    req_headers: dict,
+    resp_headers: dict,
+    thread_tag: str = "",
+    method_override: Optional[str] = None,
+    row_label: Optional[str] = None,
 ) -> bool:
     """Print per-row output. Returns True if the row succeeded."""
     method = method_override if method_override is not None else args.method
     label = row_label if row_label is not None else f"row {line_num}"
     if args.verbose:
-        print_verbose(bar, method, url, req_body, req_headers, status, body, resp_headers, elapsed)
+        print_verbose(
+            bar, method, url, req_body, req_headers, status, body, resp_headers, elapsed
+        )
 
     if status is not None and 200 <= status < 300:
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-        _out(bar, f"{_GREEN}{thread_tag}[OK]    {label}: {status} {url}{elapsed_str}{_RESET}")
+        _out(
+            bar,
+            f"{_GREEN}{thread_tag}[OK]    {label}: {status} {url}{elapsed_str}{_RESET}",
+        )
         return True
     else:
         short_body = body[:200].replace("\n", " ")
         status_str = str(status) if status is not None else "ERR"
         elapsed_str = f"  ({elapsed * 1000:.0f} ms)" if not args.verbose else ""
-        _out(bar, f"{_RED}{thread_tag}[FAIL]  {label}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}")
+        _out(
+            bar,
+            f"{_RED}{thread_tag}[FAIL]  {label}: {status_str} {url}{elapsed_str} | {short_body}{_RESET}",
+        )
         return False
 
 
-def _validate_placeholders(args: argparse.Namespace, fieldnames: Optional[list]) -> None:
+def _validate_placeholders(
+    args: argparse.Namespace, fieldnames: Optional[list]
+) -> None:
     header_val_placeholders: list = []
-    for raw in (args.header or []):
+    for raw in args.header or []:
         if ": " not in raw:
-            print(f"[ERROR] --header value must be in 'Name: value' format, got: {raw!r}", file=sys.stderr)
+            print(
+                f"[ERROR] --header value must be in 'Name: value' format, got: {raw!r}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         _, _, val_tmpl = raw.partition(": ")
         header_val_placeholders += PLACEHOLDER_RE.findall(val_tmpl)
@@ -1087,7 +1209,10 @@ def _validate_placeholders(args: argparse.Namespace, fieldnames: Optional[list])
         return
     missing = [p for p in all_placeholders if p not in (fieldnames or [])]
     if missing:
-        print(f"[ERROR] CSV is missing columns required by placeholders: {missing}", file=sys.stderr)
+        print(
+            f"[ERROR] CSV is missing columns required by placeholders: {missing}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     if args.body:
         err = _validate_body_template(args.body, args.content_type)
@@ -1104,15 +1229,18 @@ def _skip_rows(reader: csv.DictReader, count: int, bar: Optional[_BottomBar]) ->
 
 
 def _handle_cmd_in_loop(
-        cmd: Optional[str],
-        bar: Optional[_BottomBar],
-        line_num: int,
-        ok: int,
-        failed: int,
+    cmd: Optional[str],
+    bar: Optional[_BottomBar],
+    line_num: int,
+    ok: int,
+    failed: int,
 ) -> bool:
     """Return True if the row loop should stop."""
     if cmd == _CMD_EXIT:
-        _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+        _out(
+            bar,
+            f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}",
+        )
         return True
     if cmd == _CMD_PAUSE:
         if bar:
@@ -1124,12 +1252,17 @@ def _handle_cmd_in_loop(
                     bar.write_line("[RESUMED]")
                     break
                 if paused_cmd == _CMD_EXIT:
-                    _out(bar,
-                         f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+                    _out(
+                        bar,
+                        f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}",
+                    )
                     return True
         else:
             if _wait_for_resume():
-                _out(bar, f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}")
+                _out(
+                    bar,
+                    f"{_GREY}[EXIT]  Stopping after row {line_num} ({ok} ok, {failed} failed so far).{_RESET}",
+                )
                 return True
     return False
 
@@ -1139,38 +1272,82 @@ def _poll_cmd(bar: Optional[_BottomBar]) -> Optional[str]:
 
 
 def _run_loop(
-        reader: csv.DictReader,
-        args: argparse.Namespace,
-        auth_header: Optional[str],
-        bar: Optional[_BottomBar],
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
-        retry_writer: Any,
-        log_file: IO[str],
-        offset: int,
-        total_rows: int,
+    reader: csv.DictReader,
+    args: argparse.Namespace,
+    auth_header: Optional[str],
+    bar: Optional[_BottomBar],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    retry_writer: Any,
+    log_file: IO[str],
+    offset: int,
+    total_rows: int,
 ) -> Tuple[int, int, int]:
     remaining = total_rows - offset
     processed = ok = failed = 0
     for line_num, row in enumerate(reader, start=offset + 1):
         processed += 1
         absolute = offset + processed
-        status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers = _fire(row, args, auth_header, suspend, resume)
+        (
+            status,
+            body,
+            elapsed,
+            url,
+            new_auth_header,
+            req_body,
+            req_headers,
+            resp_headers,
+        ) = _fire(row, args, auth_header, suspend, resume)
         if new_auth_header:
             auth_header = new_auth_header
         if status is None and not url:
             failed += 1
             retry_writer.writerow(row)
             _out(bar, f"{_RED}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
-            _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, {}, None, body, {}, 0.0)
+            _write_failure_log(
+                log_file,
+                "SKIP",
+                line_num,
+                args.method,
+                "",
+                None,
+                {},
+                None,
+                body,
+                {},
+                0.0,
+            )
             _progress(bar, absolute, total_rows)
             continue
-        succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body, req_headers, resp_headers)
+        succeeded = _log_row(
+            bar,
+            args,
+            line_num,
+            status,
+            body,
+            elapsed,
+            url,
+            req_body,
+            req_headers,
+            resp_headers,
+        )
         ok += int(succeeded)
         if not succeeded:
             failed += 1
             retry_writer.writerow(row)
-            _write_failure_log(log_file, "FAIL", line_num, args.method, url, req_body, req_headers, status, body, resp_headers, elapsed)
+            _write_failure_log(
+                log_file,
+                "FAIL",
+                line_num,
+                args.method,
+                url,
+                req_body,
+                req_headers,
+                status,
+                body,
+                resp_headers,
+                elapsed,
+            )
         _progress(bar, absolute, total_rows)
         cmd = _poll_cmd(bar)
         if _handle_cmd_in_loop(cmd, bar, line_num, ok, failed):
@@ -1181,17 +1358,17 @@ def _run_loop(
 
 
 def _parallel_worker(
-        work_queue: "queue.Queue[Tuple[int, dict]]",
-        args: argparse.Namespace,
-        state: _ParallelState,
-        bar: Optional[_BottomBar],
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
-        retry_writer: Any,
-        log_file: "IO[str]",
-        total_rows: int,
-        auth_refresh_fn: Callable,
-        debug: bool = False,
+    work_queue: "queue.Queue[Tuple[int, dict]]",
+    args: argparse.Namespace,
+    state: _ParallelState,
+    bar: Optional[_BottomBar],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    retry_writer: Any,
+    log_file: "IO[str]",
+    total_rows: int,
+    auth_refresh_fn: Callable,
+    debug: bool = False,
 ) -> None:
     thread_tag = f"[{threading.current_thread().name}] " if debug else ""
     while True:
@@ -1212,8 +1389,22 @@ def _parallel_worker(
             state.in_flight += 1
 
         try:
-            status, body, elapsed, url, new_auth_header, req_body, req_headers, resp_headers = _fire(
-                row, args, auth_header, suspend=None, resume=None, auth_refresh_fn=auth_refresh_fn,
+            (
+                status,
+                body,
+                elapsed,
+                url,
+                new_auth_header,
+                req_body,
+                req_headers,
+                resp_headers,
+            ) = _fire(
+                row,
+                args,
+                auth_header,
+                suspend=None,
+                resume=None,
+                auth_refresh_fn=auth_refresh_fn,
             )
         finally:
             with state.lock:
@@ -1229,16 +1420,42 @@ def _parallel_worker(
 
         if status is None and not url:
             with state.output_lock:
-                _out(bar, f"{_RED}{thread_tag}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}")
+                _out(
+                    bar,
+                    f"{_RED}{thread_tag}[SKIP]  row {line_num}: {body} | row={dict(row)}{_RESET}",
+                )
                 _progress(bar, absolute, total_rows)
             with state.lock:
                 state.failed += 1
                 retry_writer.writerow(row)
-                _write_failure_log(log_file, "SKIP", line_num, args.method, "", None, {}, None, body, {}, 0.0)
+                _write_failure_log(
+                    log_file,
+                    "SKIP",
+                    line_num,
+                    args.method,
+                    "",
+                    None,
+                    {},
+                    None,
+                    body,
+                    {},
+                    0.0,
+                )
         else:
             with state.output_lock:
-                succeeded = _log_row(bar, args, line_num, status, body, elapsed, url, req_body, req_headers,
-                                     resp_headers, thread_tag=thread_tag)
+                succeeded = _log_row(
+                    bar,
+                    args,
+                    line_num,
+                    status,
+                    body,
+                    elapsed,
+                    url,
+                    req_body,
+                    req_headers,
+                    resp_headers,
+                    thread_tag=thread_tag,
+                )
                 _progress(bar, absolute, total_rows)
             with state.lock:
                 if succeeded:
@@ -1246,18 +1463,30 @@ def _parallel_worker(
                 else:
                     state.failed += 1
                     retry_writer.writerow(row)
-                    _write_failure_log(log_file, "FAIL", line_num, args.method, url, req_body, req_headers, status, body, resp_headers, elapsed)
+                    _write_failure_log(
+                        log_file,
+                        "FAIL",
+                        line_num,
+                        args.method,
+                        url,
+                        req_body,
+                        req_headers,
+                        status,
+                        body,
+                        resp_headers,
+                        elapsed,
+                    )
 
         work_queue.task_done()
 
 
 def _run_parallel_main_loop(
-        threads: list,
-        producer_thread: threading.Thread,
-        state: "_ParallelState",
-        bar: Optional[_BottomBar],
-        debug: bool,
-        work_queue: "queue.Queue",
+    threads: list,
+    producer_thread: threading.Thread,
+    state: "_ParallelState",
+    bar: Optional[_BottomBar],
+    debug: bool,
+    work_queue: "queue.Queue",
 ) -> None:
     """Drive the command-poll / pause / exit / debug-bar loop for parallel runs."""
     _debug_ts = 0.0
@@ -1293,12 +1522,18 @@ def _run_parallel_main_loop(
                     with state.output_lock:
                         if _exiting:
                             if n > 0:
-                                _out(bar, f"{_GREY}[EXIT]  Waiting for {n} in-flight {word} to finish...{_RESET}")
+                                _out(
+                                    bar,
+                                    f"{_GREY}[EXIT]  Waiting for {n} in-flight {word} to finish...{_RESET}",
+                                )
                             else:
                                 _out(bar, f"{_GREY}[EXIT]  Stopping...{_RESET}")
                         else:
                             if n > 0:
-                                _out(bar, f"[PAUSING]  Waiting for {n} in-flight {word} to finish...")
+                                _out(
+                                    bar,
+                                    f"[PAUSING]  Waiting for {n} in-flight {word} to finish...",
+                                )
                             else:
                                 # Stay in the paused state until the user explicitly
                                 # resumes/exits. Re-printing is suppressed by the
@@ -1326,16 +1561,16 @@ def _run_parallel_main_loop(
 
 
 def _run_parallel(
-        reader: csv.DictReader,
-        args: argparse.Namespace,
-        auth_header: Optional[str],
-        bar: Optional[_BottomBar],
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
-        retry_writer: Any,
-        log_file: "IO[str]",
-        offset: int,
-        total_rows: int,
+    reader: csv.DictReader,
+    args: argparse.Namespace,
+    auth_header: Optional[str],
+    bar: Optional[_BottomBar],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    retry_writer: Any,
+    log_file: "IO[str]",
+    offset: int,
+    total_rows: int,
 ) -> Tuple[int, int, int]:
     effective_rows = total_rows - offset
     if effective_rows <= 0:
@@ -1345,7 +1580,7 @@ def _run_parallel(
     state = _ParallelState(auth_header)
     auth_refresh_fn = _make_auth_refresh_fn(args, state, suspend, resume)
     n_workers = min(args.concurrency_level, effective_rows)
-    debug = getattr(args, 'debug', False)
+    debug = getattr(args, "debug", False)
 
     def _producer() -> None:
         for line_num, row in enumerate(reader, start=offset + 1):
@@ -1371,7 +1606,19 @@ def _run_parallel(
         threading.Thread(
             target=_parallel_worker,
             name=f"worker-{i + 1}",
-            args=(work_queue, args, state, bar, suspend, resume, retry_writer, log_file, total_rows, auth_refresh_fn, debug),
+            args=(
+                work_queue,
+                args,
+                state,
+                bar,
+                suspend,
+                resume,
+                retry_writer,
+                log_file,
+                total_rows,
+                auth_refresh_fn,
+                debug,
+            ),
             daemon=True,
         )
         for i in range(n_workers)
@@ -1388,19 +1635,20 @@ def _run_parallel(
 # Workflow runners
 # ---------------------------------------------------------------------------
 
+
 def _run_workflow_loop(
-        reader: csv.DictReader,
-        steps: list,
-        args: argparse.Namespace,
-        auth_headers: dict,
-        bar: Optional[_BottomBar],
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
-        retry_writer: Any,
-        log_file: IO[str],
-        offset: int,
-        total_rows: int,
-        fieldnames: list,
+    reader: csv.DictReader,
+    steps: list,
+    args: argparse.Namespace,
+    auth_headers: dict,
+    bar: Optional[_BottomBar],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    retry_writer: Any,
+    log_file: IO[str],
+    offset: int,
+    total_rows: int,
+    fieldnames: list,
 ) -> Tuple[int, int, int]:
     """Sequential workflow runner: all steps for each row before moving to the next."""
     remaining = total_rows - offset
@@ -1425,9 +1673,22 @@ def _run_workflow_loop(
             step_auth = auth_headers.get(step.path)
             label = f"row {line_num} [{step.path}]"
 
-            status, body, elapsed, url, new_auth, req_body, req_headers, resp_headers = _fire_workflow_step(
-                step, row, step_auth, args.timeout,
-                suspend=suspend, resume=resume,
+            (
+                status,
+                body,
+                elapsed,
+                url,
+                new_auth,
+                req_body,
+                req_headers,
+                resp_headers,
+            ) = _fire_workflow_step(
+                step,
+                row,
+                step_auth,
+                args.timeout,
+                suspend=suspend,
+                resume=resume,
             )
 
             if new_auth is not None:
@@ -1436,7 +1697,19 @@ def _run_workflow_loop(
             if status is None and not url:
                 # substitution error
                 _out(bar, f"{_RED}[SKIP]  {label}: {body} | row={dict(row)}{_RESET}")
-                _write_failure_log(log_file, "SKIP", line_num, step.method, "", None, {}, None, body, {}, 0.0)
+                _write_failure_log(
+                    log_file,
+                    "SKIP",
+                    line_num,
+                    step.method,
+                    "",
+                    None,
+                    {},
+                    None,
+                    body,
+                    {},
+                    0.0,
+                )
                 row_failed = True
                 if first_failed_step is None:
                     first_failed_step = step.path
@@ -1445,13 +1718,33 @@ def _run_workflow_loop(
                 continue
 
             succeeded = _log_row(
-                bar, args, line_num, status, body, elapsed, url,
-                req_body, req_headers, resp_headers,
+                bar,
+                args,
+                line_num,
+                status,
+                body,
+                elapsed,
+                url,
+                req_body,
+                req_headers,
+                resp_headers,
                 method_override=step.method,
                 row_label=label,
             )
             if not succeeded:
-                _write_failure_log(log_file, "FAIL", line_num, step.method, url, req_body, req_headers, status, body, resp_headers, elapsed)
+                _write_failure_log(
+                    log_file,
+                    "FAIL",
+                    line_num,
+                    step.method,
+                    url,
+                    req_body,
+                    req_headers,
+                    status,
+                    body,
+                    resp_headers,
+                    elapsed,
+                )
                 row_failed = True
                 if first_failed_step is None:
                     first_failed_step = step.path
@@ -1479,10 +1772,10 @@ def _run_workflow_loop(
 
 
 def _make_workflow_auth_refresh_fns(
-        steps: list,
-        state: _WorkflowParallelState,
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
+    steps: list,
+    state: _WorkflowParallelState,
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
 ) -> dict:
     """Return a dict of step.path -> auth-refresh closure for parallel workflow workers."""
     fns: dict = {}
@@ -1509,6 +1802,7 @@ def _make_workflow_auth_refresh_fns(
                                 resume()
                     state.auth_headers[s.path] = new
                     return new
+
             return refresh
 
         fns[path] = make_fn(step)
@@ -1516,16 +1810,16 @@ def _make_workflow_auth_refresh_fns(
 
 
 def _workflow_parallel_worker(
-        work_queue: "queue.Queue[Optional[Tuple[int, dict]]]",
-        steps: list,
-        args: argparse.Namespace,
-        state: _WorkflowParallelState,
-        bar: Optional[_BottomBar],
-        retry_writer: Any,
-        log_file: "IO[str]",
-        total_rows: int,
-        auth_refresh_fns: dict,
-        debug: bool = False,
+    work_queue: "queue.Queue[Optional[Tuple[int, dict]]]",
+    steps: list,
+    args: argparse.Namespace,
+    state: _WorkflowParallelState,
+    bar: Optional[_BottomBar],
+    retry_writer: Any,
+    log_file: "IO[str]",
+    total_rows: int,
+    auth_refresh_fns: dict,
+    debug: bool = False,
 ) -> None:
     thread_tag = f"[{threading.current_thread().name}] " if debug else ""
     while True:
@@ -1563,8 +1857,20 @@ def _workflow_parallel_worker(
                     step_auth = state.auth_headers.get(step.path)
 
                 label = f"row {line_num} [{step.path}]"
-                status, body, elapsed, url, new_auth, req_body, req_headers, resp_headers = _fire_workflow_step(
-                    step, row, step_auth, args.timeout,
+                (
+                    status,
+                    body,
+                    elapsed,
+                    url,
+                    new_auth,
+                    req_body,
+                    req_headers,
+                    resp_headers,
+                ) = _fire_workflow_step(
+                    step,
+                    row,
+                    step_auth,
+                    args.timeout,
                     auth_refresh_fn=auth_refresh_fns.get(step.path),
                 )
 
@@ -1574,9 +1880,24 @@ def _workflow_parallel_worker(
 
                 if status is None and not url:
                     with state.output_lock:
-                        _out(bar, f"{_RED}{thread_tag}[SKIP]  {label}: {body} | row={dict(row)}{_RESET}")
+                        _out(
+                            bar,
+                            f"{_RED}{thread_tag}[SKIP]  {label}: {body} | row={dict(row)}{_RESET}",
+                        )
                     with state.lock:
-                        _write_failure_log(log_file, "SKIP", line_num, step.method, "", None, {}, None, body, {}, 0.0)
+                        _write_failure_log(
+                            log_file,
+                            "SKIP",
+                            line_num,
+                            step.method,
+                            "",
+                            None,
+                            {},
+                            None,
+                            body,
+                            {},
+                            0.0,
+                        )
                     row_failed = True
                     if first_failed_step is None:
                         first_failed_step = step.path
@@ -1586,15 +1907,35 @@ def _workflow_parallel_worker(
 
                 with state.output_lock:
                     succeeded = _log_row(
-                        bar, args, line_num, status, body, elapsed, url,
-                        req_body, req_headers, resp_headers,
+                        bar,
+                        args,
+                        line_num,
+                        status,
+                        body,
+                        elapsed,
+                        url,
+                        req_body,
+                        req_headers,
+                        resp_headers,
                         thread_tag=thread_tag,
                         method_override=step.method,
                         row_label=label,
                     )
                 if not succeeded:
                     with state.lock:
-                        _write_failure_log(log_file, "FAIL", line_num, step.method, url, req_body, req_headers, status, body, resp_headers, elapsed)
+                        _write_failure_log(
+                            log_file,
+                            "FAIL",
+                            line_num,
+                            step.method,
+                            url,
+                            req_body,
+                            req_headers,
+                            status,
+                            body,
+                            resp_headers,
+                            elapsed,
+                        )
                     row_failed = True
                     if first_failed_step is None:
                         first_failed_step = step.path
@@ -1624,17 +1965,17 @@ def _workflow_parallel_worker(
 
 
 def _run_workflow_parallel(
-        reader: csv.DictReader,
-        steps: list,
-        args: argparse.Namespace,
-        auth_headers: dict,
-        bar: Optional[_BottomBar],
-        suspend: Optional[Callable],
-        resume: Optional[Callable],
-        retry_writer: Any,
-        log_file: "IO[str]",
-        offset: int,
-        total_rows: int,
+    reader: csv.DictReader,
+    steps: list,
+    args: argparse.Namespace,
+    auth_headers: dict,
+    bar: Optional[_BottomBar],
+    suspend: Optional[Callable],
+    resume: Optional[Callable],
+    retry_writer: Any,
+    log_file: "IO[str]",
+    offset: int,
+    total_rows: int,
 ) -> Tuple[int, int, int]:
     effective_rows = total_rows - offset
     if effective_rows <= 0:
@@ -1644,7 +1985,7 @@ def _run_workflow_parallel(
     state = _WorkflowParallelState(auth_headers)
     auth_refresh_fns = _make_workflow_auth_refresh_fns(steps, state, suspend, resume)
     n_workers = min(args.concurrency_level, effective_rows)
-    debug = getattr(args, 'debug', False)
+    debug = getattr(args, "debug", False)
 
     def _producer() -> None:
         for line_num, row in enumerate(reader, start=offset + 1):
@@ -1669,7 +2010,18 @@ def _run_workflow_parallel(
         threading.Thread(
             target=_workflow_parallel_worker,
             name=f"worker-{i + 1}",
-            args=(work_queue, steps, args, state, bar, retry_writer, log_file, total_rows, auth_refresh_fns, debug),
+            args=(
+                work_queue,
+                steps,
+                args,
+                state,
+                bar,
+                retry_writer,
+                log_file,
+                total_rows,
+                auth_refresh_fns,
+                debug,
+            ),
             daemon=True,
         )
         for i in range(n_workers)
@@ -1686,6 +2038,7 @@ def _run_workflow_parallel(
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     try:
         _run()
@@ -1696,36 +2049,119 @@ def main() -> None:
 
 def _run() -> None:
     parser = argparse.ArgumentParser(description="Bulk HTTP requests from CSV rows")
-    parser.add_argument("--url", "-u", default=None, help="Target URL, may contain {{variable}} placeholders")
-    parser.add_argument("--workflow", "-w", default=None, metavar="WORKFLOW_YAML",
-                        help="Path to a workflow YAML file defining multiple HTTP steps per row")
-    parser.add_argument("--auth-type", "-a", default="none", choices=["bearer", "basic", "none"],
-                        dest="auth_type", help="Auth method: bearer, basic, or none (default)")
-    parser.add_argument("--token", "-t", default=None,
-                        help="Bearer token (overrides BULK_TOKEN env var); used with --auth-type bearer")
-    parser.add_argument("--user", "-U", default=None,
-                        help="Basic auth credentials as user:pass (overrides BULK_USER env var); used with --auth-type basic")
-    parser.add_argument("--csv", "-c", required=True, dest="csv_path", help="Path to CSV file")
-    parser.add_argument("--method", "-m", default="POST", help="HTTP method (default: POST)")
-    parser.add_argument("--body", "-b", default=None, help="Request body (e.g. JSON string)")
-    parser.add_argument("--content-type", "-C", default="application/json", dest="content_type",
-                        help="Content-Type header (default: application/json)")
-    parser.add_argument("--delay", "-d", type=int, default=0,
-                        help="Delay in milliseconds between requests (default: 0)")
-    parser.add_argument("--offset", "-o", type=int, default=0, help="Skip first N data rows (default: 0)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Print request/response details and timing")
-    parser.add_argument("--timeout", "-T", type=int, default=30, help="Request timeout in seconds (default: 30)")
-    parser.add_argument("--retry-file", "-r", default=None, dest="retry_file",
-                        help="Path for failed-rows CSV (default: <input_stem>_failed.csv)")
-    parser.add_argument("--parallel", "-p", action="store_true", default=False,
-                        help="Process rows in parallel using multiple threads")
-    parser.add_argument("--concurrency-level", "-n", type=int, default=os.cpu_count() or 4,
-                        dest="concurrency_level",
-                        help=f"Number of parallel worker threads (default: {os.cpu_count() or 4}); only used with --parallel")
-    parser.add_argument("--header", "-H", action="append", default=None, metavar="NAME: VALUE",
-                        help="Add a custom request header; repeatable. Value supports {{col}} placeholders.")
-    parser.add_argument("--debug", "-D", action="store_true", default=False,
-                        help="Print diagnostic info per row (thread name, queue depth); only meaningful with --parallel")
+    parser.add_argument(
+        "--url",
+        "-u",
+        default=None,
+        help="Target URL, may contain {{variable}} placeholders",
+    )
+    parser.add_argument(
+        "--workflow",
+        "-w",
+        default=None,
+        metavar="WORKFLOW_YAML",
+        help="Path to a workflow YAML file defining multiple HTTP steps per row",
+    )
+    parser.add_argument(
+        "--auth-type",
+        "-a",
+        default="none",
+        choices=["bearer", "basic", "none"],
+        dest="auth_type",
+        help="Auth method: bearer, basic, or none (default)",
+    )
+    parser.add_argument(
+        "--token",
+        "-t",
+        default=None,
+        help="Bearer token (overrides BULK_TOKEN env var); used with --auth-type bearer",
+    )
+    parser.add_argument(
+        "--user",
+        "-U",
+        default=None,
+        help="Basic auth credentials as user:pass (overrides BULK_USER env var); used with --auth-type basic",
+    )
+    parser.add_argument(
+        "--csv", "-c", required=True, dest="csv_path", help="Path to CSV file"
+    )
+    parser.add_argument(
+        "--method", "-m", default="POST", help="HTTP method (default: POST)"
+    )
+    parser.add_argument(
+        "--body", "-b", default=None, help="Request body (e.g. JSON string)"
+    )
+    parser.add_argument(
+        "--content-type",
+        "-C",
+        default="application/json",
+        dest="content_type",
+        help="Content-Type header (default: application/json)",
+    )
+    parser.add_argument(
+        "--delay",
+        "-d",
+        type=int,
+        default=0,
+        help="Delay in milliseconds between requests (default: 0)",
+    )
+    parser.add_argument(
+        "--offset",
+        "-o",
+        type=int,
+        default=0,
+        help="Skip first N data rows (default: 0)",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print request/response details and timing",
+    )
+    parser.add_argument(
+        "--timeout",
+        "-T",
+        type=int,
+        default=30,
+        help="Request timeout in seconds (default: 30)",
+    )
+    parser.add_argument(
+        "--retry-file",
+        "-r",
+        default=None,
+        dest="retry_file",
+        help="Path for failed-rows CSV (default: <input_stem>_failed.csv)",
+    )
+    parser.add_argument(
+        "--parallel",
+        "-p",
+        action="store_true",
+        default=False,
+        help="Process rows in parallel using multiple threads",
+    )
+    parser.add_argument(
+        "--concurrency-level",
+        "-n",
+        type=int,
+        default=os.cpu_count() or 4,
+        dest="concurrency_level",
+        help=f"Number of parallel worker threads (default: {os.cpu_count() or 4}); only used with --parallel",
+    )
+    parser.add_argument(
+        "--header",
+        "-H",
+        action="append",
+        default=None,
+        metavar="NAME: VALUE",
+        help="Add a custom request header; repeatable. Value supports {{col}} placeholders.",
+    )
+    parser.add_argument(
+        "--debug",
+        "-D",
+        action="store_true",
+        default=False,
+        help="Print diagnostic info per row (thread name, queue depth); only meaningful with --parallel",
+    )
     args = parser.parse_args()
 
     # Mutual exclusivity and presence checks
@@ -1733,7 +2169,9 @@ def _run() -> None:
         print("[ERROR] --url and --workflow are mutually exclusive.", file=sys.stderr)
         sys.exit(1)
     if not args.url and not args.workflow:
-        print("[ERROR] One of --url (-u) or --workflow (-w) is required.", file=sys.stderr)
+        print(
+            "[ERROR] One of --url (-u) or --workflow (-w) is required.", file=sys.stderr
+        )
         sys.exit(1)
 
     args.method = args.method.upper()
@@ -1742,7 +2180,11 @@ def _run() -> None:
     offset = args.offset
 
     csv_path = pathlib.Path(args.csv_path)
-    retry_path = pathlib.Path(args.retry_file) if args.retry_file else csv_path.parent / f"{csv_path.stem}_failed.csv"
+    retry_path = (
+        pathlib.Path(args.retry_file)
+        if args.retry_file
+        else csv_path.parent / f"{csv_path.stem}_failed.csv"
+    )
     log_path = retry_path.with_suffix(".log")
 
     # Single pass: read header and count rows before starting the bar or prompting
@@ -1776,7 +2218,10 @@ def _run() -> None:
         retry_fieldnames = fieldnames
 
     if offset >= total_rows > 0:
-        print(f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).", file=sys.stderr)
+        print(
+            f"[ERROR] --offset {offset} is beyond the last row ({total_rows} data rows total).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:
@@ -1813,25 +2258,64 @@ def _run() -> None:
             log_file = _open_log_file(log_path)
             try:
                 if workflow_mode:
-                    auth_headers, _ = _resolve_workflow_auth_headers(steps, suspend=suspend, resume=resume)
+                    auth_headers, _ = _resolve_workflow_auth_headers(
+                        steps, suspend=suspend, resume=resume
+                    )
                     if args.parallel:
                         ok, failed, processed = _run_workflow_parallel(
-                            reader, steps, args, auth_headers, bar, suspend, resume,
-                            retry_writer, log_file, offset, total_rows,
+                            reader,
+                            steps,
+                            args,
+                            auth_headers,
+                            bar,
+                            suspend,
+                            resume,
+                            retry_writer,
+                            log_file,
+                            offset,
+                            total_rows,
                         )
                     else:
                         ok, failed, processed = _run_workflow_loop(
-                            reader, steps, args, auth_headers, bar, suspend, resume,
-                            retry_writer, log_file, offset, total_rows, retry_fieldnames,
+                            reader,
+                            steps,
+                            args,
+                            auth_headers,
+                            bar,
+                            suspend,
+                            resume,
+                            retry_writer,
+                            log_file,
+                            offset,
+                            total_rows,
+                            retry_fieldnames,
                         )
                 elif args.parallel:
                     ok, failed, processed = _run_parallel(
-                        reader, args, auth_header, bar, suspend, resume,
-                        retry_writer, log_file, offset, total_rows,
+                        reader,
+                        args,
+                        auth_header,
+                        bar,
+                        suspend,
+                        resume,
+                        retry_writer,
+                        log_file,
+                        offset,
+                        total_rows,
                     )
                 else:
-                    ok, failed, processed = _run_loop(reader, args, auth_header, bar, suspend, resume, retry_writer, log_file, offset,
-                                                      total_rows)
+                    ok, failed, processed = _run_loop(
+                        reader,
+                        args,
+                        auth_header,
+                        bar,
+                        suspend,
+                        resume,
+                        retry_writer,
+                        log_file,
+                        offset,
+                        total_rows,
+                    )
             finally:
                 retry_file.close()
                 log_file.close()
