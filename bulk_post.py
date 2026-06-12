@@ -2050,8 +2050,9 @@ def main() -> None:
         # without a traceback. Redirect stdout to devnull so interpreter
         # shutdown doesn't re-raise on flush.
         with contextlib.suppress(OSError):
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
+            fd = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(fd, sys.stdout.fileno())
+            os.close(fd)
         sys.exit(0)
 
 
