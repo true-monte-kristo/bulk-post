@@ -598,7 +598,7 @@ class TestRun(unittest.TestCase):
             patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=capture),
-            patch("bulk_post.prompt_new_token", return_value="new-tok"),
+            patch("bulk_post.runner.prompt_new_token", return_value="new-tok"),
             patch("builtins.print"),
         ):
             bulk_post._run()
@@ -1051,7 +1051,7 @@ class TestRun(unittest.TestCase):
             ),
             patch("sys.stdin.isatty", return_value=False),
             patch("urllib.request.urlopen", side_effect=capture),
-            patch("bulk_post.prompt_new_basic_creds", return_value="new:pass"),
+            patch("bulk_post.runner.prompt_new_basic_creds", return_value="new:pass"),
             patch("builtins.print"),
         ):
             bulk_post._run()
@@ -1323,7 +1323,7 @@ class TestParallelRun(unittest.TestCase):
                 ),
                 patch("sys.stdin.isatty", return_value=False),
                 patch("urllib.request.urlopen", side_effect=slow_resp),
-                patch("bulk_post._poll_cmd", side_effect=mock_poll),
+                patch("bulk_post.runner._poll_cmd", side_effect=mock_poll),
             ):
                 bulk_post._run()
             result["done"] = True
@@ -1937,7 +1937,7 @@ class TestResumeAfterDrain(unittest.TestCase):
             return None
 
         with (
-            patch.object(bulk_post, "_poll_cmd", fake_poll),
+            patch.object(bulk_post.runner, "_poll_cmd", fake_poll),
             contextlib.redirect_stdout(_io.StringIO()),
         ):
             bulk_post._run_parallel_main_loop(
