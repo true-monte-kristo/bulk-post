@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 import xml.etree.ElementTree as _ET
 
 PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
@@ -34,15 +33,13 @@ def _validate_body_template(template: str, content_type: str) -> str | None:
     return None
 
 
-def _validate_placeholders(args: argparse.Namespace, fieldnames: list | None) -> None:
+def _validate_placeholders(
+    args: argparse.Namespace, fieldnames: list | None
+) -> str | None:
     header_val_placeholders: list = []
     for raw in args.header or []:
         if ": " not in raw:
-            print(
-                f"[ERROR] --header value must be in 'Name: value' format, got: {raw!r}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            return f"--header value must be in 'Name: value' format, got: {raw!r}"
         _, _, val_tmpl = raw.partition(": ")
         header_val_placeholders += PLACEHOLDER_RE.findall(val_tmpl)
 
@@ -52,16 +49,12 @@ def _validate_placeholders(args: argparse.Namespace, fieldnames: list | None) ->
         + header_val_placeholders
     )
     if not all_placeholders:
-        return
+        return None
     missing = [p for p in all_placeholders if p not in (fieldnames or [])]
     if missing:
-        print(
-            f"[ERROR] CSV is missing columns required by placeholders: {missing}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        return f"CSV is missing columns required by placeholders: {missing}"
     if args.body:
         err = _validate_body_template(args.body, args.content_type)
         if err:
-            print(f"[ERROR] {err}", file=sys.stderr)
-            sys.exit(1)
+            return err
+    return None

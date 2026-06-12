@@ -226,13 +226,10 @@ def _run(argv: list[str] | None = None) -> int:
             print(f"[ERROR] {verr}", file=sys.stderr)
             raise _CliError(1)
     else:
-        # _validate_placeholders prints the error to stderr then sys.exit(1) on a
-        # setup/validation failure; convert that to a _CliError so main() returns
-        # the centralized exit code instead of raising SystemExit.
-        try:
-            _validate_placeholders(args, fieldnames)
-        except SystemExit as e:
-            raise _CliError(e.code if isinstance(e.code, int) else 1) from e
+        verr = _validate_placeholders(args, fieldnames)
+        if verr:
+            print(f"[ERROR] {verr}", file=sys.stderr)
+            raise _CliError(1)
         retry_fieldnames = fieldnames
 
     if offset >= total_rows > 0:
@@ -370,7 +367,3 @@ def main(argv: list[str] | None = None) -> int:
             os.dup2(fd, sys.stdout.fileno())
             os.close(fd)
         return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

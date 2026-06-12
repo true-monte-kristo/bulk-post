@@ -41,9 +41,6 @@ from .auth import (
     resolve_token as resolve_token,
 )
 from .cli import (
-    _CliError as _CliError,
-)
-from .cli import (
     _get_version as _get_version,
 )
 from .cli import (
