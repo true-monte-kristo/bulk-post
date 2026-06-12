@@ -1,6 +1,6 @@
 # bulk-post
 
-A near-stdlib Python CLI that reads a CSV file and fires one HTTP request per row. Supports Bearer token auth with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, multi-step workflows, and a retry file for failed rows. The only third-party dependency is PyYAML, used solely for `--workflow` mode.
+A near-stdlib Python CLI that reads a CSV file and fires one HTTP request per row. Supports bearer or basic auth (default: no auth) with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, multi-step workflows, and a retry file for failed rows. The only third-party dependency is PyYAML, used solely for `--workflow` mode.
 
 ## Requirements
 
@@ -80,7 +80,7 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--url` | `-u` | required | URL template; `{{col}}` is replaced with the value from that CSV column |
+| `--url` | `-u` | required* | URL template; `{{col}}` is replaced with the value from that CSV column. *Provide either `--url` or `--workflow` (mutually exclusive) |
 | `--csv` | `-c` | required | Path to the input CSV file |
 | `--method` | `-m` | `POST` | HTTP method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, …) |
 | `--body` | `-b` | — | Request body; supports `{{col}}` placeholders |
@@ -102,7 +102,7 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 
 ## CSV format
 
-The CSV must have a header row. Column names are used as placeholder names in `--url` and `--body`. Every `{{placeholder}}` in the URL or body must match a column name; the script exits with an error if any are missing.
+The CSV must have a header row. Column names are used as placeholder names in `--url`, `--body`, and `--header` values. Every `{{placeholder}}` in the URL, body, or header values must match a column name; the script exits with an error if any are missing.
 
 ```csv
 id,reason
@@ -112,11 +112,11 @@ id,reason
 
 ## Auth
 
-Select the auth method with `--auth-type` / `-a`:
+Select the auth method with `--auth-type` / `-a` (default: `none`):
 
-### Bearer token (default)
+### Bearer token
 
-Resolution order: `--token` / `-t` flag → `BULK_TOKEN` env var → interactive prompt at startup.
+Pass `--auth-type bearer` (or `-a bearer`). Token resolution order: `--token` / `-t` flag → `BULK_TOKEN` env var → interactive prompt at startup.
 
 If the server returns **401** mid-run, the script pauses, prompts for a fresh token, and retries the failed row automatically. Tokens are Keycloak SSO tokens obtained from browser DevTools and cannot be fetched programmatically.
 
@@ -124,9 +124,9 @@ If the server returns **401** mid-run, the script pauses, prompts for a fresh to
 
 Pass `--auth-type basic` (or `-a basic`). Credentials (`user:pass`) are resolved in the same order: `--user` / `-U` flag → `BULK_USER` env var → interactive prompt. On **401**, the script prompts for new credentials and retries.
 
-### No auth
+### No auth (default)
 
-Pass `--auth-type none` (or `-a none`). No `Authorization` header is sent.
+The default when `--auth-type` is omitted (or pass `--auth-type none` / `-a none` explicitly). No `Authorization` header is sent.
 
 ## Terminal UI
 
