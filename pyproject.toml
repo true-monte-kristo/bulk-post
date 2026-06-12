@@ -13,7 +13,9 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.1.0",
     "ruff>=0.15.17",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.ruff]
@@ -23,3 +25,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
 ignore = ["E501"]  # long help/URL string literals are fine; the formatter governs code layout
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_return_any = true
+warn_redundant_casts = true
+# Pragmatic start: do NOT enable disallow_untyped_defs / strict yet.
+# Tighten in a later pass once the package split lands.

@@ -27,6 +27,7 @@ import base64
 import contextlib
 import csv
 import dataclasses
+import io
 import datetime
 import json
 import os
@@ -395,7 +396,7 @@ class _BottomBar:
     """
 
     def __init__(self, debug_mode: bool = False) -> None:
-        self._q: queue.Queue = queue.Queue()
+        self._q: queue.Queue[str] = queue.Queue()
         self._lock = threading.Lock()
         self._buf = ""
         self._nav_idx: int = -1  # -1 = free input; 0..len(_COMMANDS)-1 = navigating
@@ -405,7 +406,7 @@ class _BottomBar:
         self._debug_mode = debug_mode
         self._active = False
         self._thread: threading.Thread | None = None
-        self._old_settings = None
+        self._old_settings: list[Any] | None = None
         self._paused = threading.Event()
         self._paused.set()  # set = not paused → input thread reads normally
         self._paused_ack = threading.Event()  # set by input thread when raw mode exited
@@ -573,13 +574,13 @@ class _BottomBar:
         # TextIOWrapper._decoded_chars, which select can't see.
         # Check _read_buf first; fall back to select on the OS fd.
         # A bare ESC has nothing in either place → return immediately, don't block.
-        raw = sys.stdin.buffer
+        raw: io.BufferedReader = cast(io.BufferedReader, sys.stdin.buffer)
 
         def _next_available() -> bool:
             pyb = getattr(raw, "_read_buf", None)
             if pyb is not None and len(pyb) > 0:
                 return True
-            r, _, _ = _select_mod.select([raw], [], [], 0.05)  # type: ignore[union-attr]
+            r, _, _ = _select_mod.select([raw], [], [], 0.05)
             return bool(r)
 
         if not _next_available():
@@ -628,13 +629,13 @@ class _BottomBar:
             tty.setraw(sys.stdin.fileno())
         except termios.error:
             return
-        raw = sys.stdin.buffer
+        raw: io.BufferedReader = cast(io.BufferedReader, sys.stdin.buffer)
         try:
             while self._active:
                 if not self._paused.is_set():
                     self._handle_pause_state()
                     continue
-                r, _, _ = _select_mod.select([raw], [], [], 0.05)  # type: ignore[union-attr]
+                r, _, _ = _select_mod.select([raw], [], [], 0.05)
                 if not r:
                     continue
                 try:
@@ -1474,7 +1475,7 @@ def _parallel_worker(
 def _run_parallel_main_loop(
     threads: list,
     producer_thread: threading.Thread,
-    state: "_ParallelState",
+    state: "_ParallelState | _WorkflowParallelState",
     bar: _BottomBar | None,
     debug: bool,
     work_queue: "queue.Queue",
