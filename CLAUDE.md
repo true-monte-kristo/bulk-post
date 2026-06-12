@@ -1,15 +1,16 @@
 # bulk-post
 
-Near-stdlib Python CLI (`bulk_post.py`) that fires HTTP requests for each row in a CSV file. Only external dependency is `pyyaml`, lazily imported and required solely for `--workflow` mode.
+Near-stdlib Python package (`src/bulk_post/`) that fires HTTP requests for each row in a CSV file. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Only external dependency is `pyyaml`, lazily imported and required solely for `--workflow` mode.
 
 ## Run & install
 
 Managed with [uv](https://docs.astral.sh/uv/).
 
 ```bash
-python bulk_post.py -u "https://api.example.com/{{id}}/cancel" -c rows.csv -m DELETE
+python -m bulk_post -u "https://api.example.com/{{id}}/cancel" -c rows.csv -m DELETE
 uv tool install .              # install `bulk-post` CLI globally
 uv tool install . --reinstall  # re-install after code changes
+uv run bulk-post --help        # run without installing (uv handles the .venv)
 ```
 
 ## Tests
@@ -60,6 +61,7 @@ Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML
 | `--parallel` | `-p` | false | run rows concurrently using multiple threads; `--delay` ignored |
 | `--concurrency-level` | `-n` | CPU count | worker thread count; only used with `--parallel` |
 | `--debug` | `-D` | false | print thread name on each row and show a live debug bar (queue depth, active threads, ok/fail counts); only meaningful with `--parallel` |
+| `--version` | `-V` | — | print version and exit |
 
 ## Auth design
 
@@ -81,6 +83,10 @@ When running in a real TTY (`termios` available), `_BottomBar` reserves the bott
 
 ## Public API surface (for tests)
 
+All names below are importable directly from `bulk_post` (e.g. `from bulk_post import substitute`) — `__init__.py` re-exports everything from the submodules.
+
+- `main()` / `_run()` → `int` exit code: `0` all rows succeeded; `1` any row failed or setup/validation error (`_CliError`); argparse usage errors → `2`
+- `build_parser()` → `argparse.ArgumentParser` — construct the CLI parser without running it
 - `_get_suggestion(buf)` — completion suffix for partial `/command`
 - `substitute(template, row)` → `(str, err_or_None)` — `{{var}}` substitution
 - `count_csv_rows(path)` → `int` — data rows excluding header; 0 on error

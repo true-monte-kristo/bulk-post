@@ -22,11 +22,13 @@ After changing the code, re-install with:
 uv tool install . --reinstall
 ```
 
-Or run directly without installing:
+Or run directly without installing (from the repo root):
 
 ```bash
-python bulk_post.py --help          # workflow mode also needs: pip install pyyaml
+python -m bulk_post --help          # workflow mode also needs: pip install pyyaml
 ```
+
+> The top-level `bulk_post.py` file no longer exists. The entry point is the `src/bulk_post/` package — use `python -m bulk_post` or `uv run bulk-post`.
 
 ## Usage
 
@@ -96,6 +98,7 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 | `--concurrency-level` | `-n` | CPU count | Number of worker threads; only used with `--parallel` |
 | `--debug` | `-D` | false | Print worker thread name on each row log line and show a live debug bar with queue depth, active thread count, and ok/fail counters; only meaningful with `--parallel` |
 | `--workflow` | `-w` | — | Path to a workflow YAML file; mutually exclusive with `--url` |
+| `--version` | `-V` | — | Print version and exit |
 
 ## CSV format
 
