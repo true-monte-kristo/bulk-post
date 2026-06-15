@@ -109,6 +109,8 @@ def resolve_variables(step: Any, responses: dict, row: dict) -> tuple[dict, str 
             )
         else:
             persisted = row.get(_var_col(var.source_path, var.name), "")
+            # Empty == absent: persist_vars never writes empty renders, so an
+            # empty column can't lose a genuinely-empty value; fall to nullable.
             extracted = persisted if persisted != "" else _NULL
 
         if extracted is _NONSCALAR:

@@ -2122,9 +2122,7 @@ class TestResolveVariables(unittest.TestCase):
         from bulk_post import VarDef, resolve_variables
 
         v = VarDef("$id", "g/a", "$.id", nullable=False)
-        vals, err = resolve_variables(
-            self._step(v), {"g/a": '{"id": 42}'}, {}
-        )
+        vals, err = resolve_variables(self._step(v), {"g/a": '{"id": 42}'}, {})
         self.assertIsNone(err)
         self.assertEqual(vals, {"$id": "42"})
 
@@ -2148,9 +2146,7 @@ class TestResolveVariables(unittest.TestCase):
         from bulk_post import VarDef, resolve_variables
 
         v = VarDef("$id", "g/a", "$.obj", nullable=True)
-        vals, err = resolve_variables(
-            self._step(v), {"g/a": '{"obj": {"k": 1}}'}, {}
-        )
+        vals, err = resolve_variables(self._step(v), {"g/a": '{"obj": {"k": 1}}'}, {})
         self.assertIsNotNone(err)
         self.assertIn("non-scalar", err)
 
@@ -2170,6 +2166,17 @@ class TestResolveVariables(unittest.TestCase):
         vals, err = resolve_variables(self._step(v), {}, {})
         self.assertIsNone(err)
         self.assertEqual(vals, {"$id": ""})
+
+    def test_empty_persisted_column_applies_nullable(self):
+        from bulk_post import VarDef, resolve_variables
+
+        # An empty persisted column is treated as absent (null), so a
+        # non-nullable variable errors rather than resolving to "".
+        v = VarDef("$id", "g/a", "$.id", nullable=False)
+        row = {"_bulk_post_var/g/a/$id": ""}
+        vals, err = resolve_variables(self._step(v), {}, row)
+        self.assertIsNotNone(err)
+        self.assertIn("$id", err)
 
 
 class TestPersistVars(unittest.TestCase):
