@@ -98,19 +98,19 @@ from .templating import (
     PLACEHOLDER_RE as PLACEHOLDER_RE,
 )
 from .templating import (
+    VAR_RE as VAR_RE,
+)
+from .templating import (
     _validate_body_template as _validate_body_template,
 )
 from .templating import (
     _validate_placeholders as _validate_placeholders,
 )
 from .templating import (
-    substitute as substitute,
-)
-from .templating import (
-    VAR_RE as VAR_RE,
-)
-from .templating import (
     render_template as render_template,
+)
+from .templating import (
+    substitute as substitute,
 )
 from .templating import (
     substitute_vars as substitute_vars,

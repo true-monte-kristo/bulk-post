@@ -2046,6 +2046,28 @@ class TestSubstituteVars(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(out, "/users/{{id}}")  # {{id}} is a column, not a var
 
+    def test_multiple_distinct_vars(self):
+        from bulk_post import substitute_vars
+
+        out, err = substitute_vars("{{$a}}/{{$b}}", {"$a": "1", "$b": "2"})
+        self.assertIsNone(err)
+        self.assertEqual(out, "1/2")
+
+    def test_repeated_var(self):
+        from bulk_post import substitute_vars
+
+        out, err = substitute_vars("{{$id}}-{{$id}}", {"$id": "9"})
+        self.assertIsNone(err)
+        self.assertEqual(out, "9-9")
+
+    def test_missing_error_lists_all_missing(self):
+        from bulk_post import substitute_vars
+
+        out, err = substitute_vars("{{$a}}{{$b}}", {})
+        self.assertIsNotNone(err)
+        self.assertIn("$a", err)
+        self.assertIn("$b", err)
+
 
 class TestRenderTemplate(unittest.TestCase):
     def test_columns_then_vars(self):
@@ -2069,6 +2091,13 @@ class TestRenderTemplate(unittest.TestCase):
 
         out, err = render_template("/{{region}}", {}, {})
         self.assertIsNotNone(err)
+
+    def test_var_adjacent_to_column(self):
+        from bulk_post import render_template
+
+        out, err = render_template("{{region}}{{$id}}", {"region": "eu"}, {"$id": "7"})
+        self.assertIsNone(err)
+        self.assertEqual(out, "eu7")
 
 
 if __name__ == "__main__":
