@@ -2603,8 +2603,10 @@ workflow:
     def test_run_succeeds_with_chained_variable(self):
         csv_path = self._write(".csv", "x\n1\n", prefix="rows")
         wf_path = self._write(".yaml", self._WF, prefix="wf")
+        calls = []
 
         def fake_http(url, auth, method, body, timeout, content_type, extra):
+            calls.append(url)
             if url == "https://api/create":
                 return (200, '{"id": 7}', 0.01, {}, {})
             return (200, "ok", 0.01, {}, {})
@@ -2616,6 +2618,7 @@ workflow:
             stdin.isatty.return_value = False
             code = bulk_post.main(["-w", wf_path, "-c", csv_path])
         self.assertEqual(code, 0)
+        self.assertIn("https://api/use/7", calls)
 
     def test_failure_persists_variable_column(self):
         csv_path = self._write(".csv", "x\n1\n", prefix="rows")
