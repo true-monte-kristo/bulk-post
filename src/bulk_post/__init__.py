@@ -221,6 +221,9 @@ from .workflow import (
 from .workflow import (
     parse_workflow as parse_workflow,
 )
+from .workflow import (
+    workflow_var_columns as workflow_var_columns,
+)
 from .workflow_runner import (
     _make_workflow_auth_refresh_fns as _make_workflow_auth_refresh_fns,
 )

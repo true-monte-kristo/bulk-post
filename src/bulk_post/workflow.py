@@ -13,7 +13,8 @@ from .auth import (
     resolve_token,
 )
 from .http import http_request
-from .templating import PLACEHOLDER_RE, substitute
+from .templating import PLACEHOLDER_RE, VAR_RE, substitute
+from .variables import VarDef, _var_col, validate_jsonpath
 
 # ---------------------------------------------------------------------------
 # Workflow constants
@@ -107,6 +108,44 @@ def _extract_content_type(raw_headers: dict) -> tuple[str, dict]:
     return content_type, headers
 
 
+def _normalize_source(src: str) -> str:
+    """Map a ``.workflow.group.endpoint`` source string to a ``group/endpoint`` path."""
+    s = str(src).strip()
+    if s.startswith("."):
+        s = s[1:]
+    if s.startswith("workflow."):
+        s = s[len("workflow.") :]
+    return s.replace(".", "/")
+
+
+def _parse_variables(raw: dict | None) -> tuple[dict, str | None]:
+    """Parse a ``variables:`` mapping into ``{name: VarDef}``. Returns (vars, err)."""
+    if not raw:
+        return {}, None
+    if not isinstance(raw, dict):
+        return {}, "'variables' must be a mapping"
+    out: dict = {}
+    for name, spec in raw.items():
+        if not isinstance(name, str) or not name.startswith("$"):
+            return {}, f"Variable name '{name}' must start with '$'"
+        if not isinstance(spec, dict):
+            return {}, f"Variable '{name}' must be a mapping"
+        source = spec.get("source")
+        json_path = spec.get("jsonPath")
+        if not source:
+            return {}, f"Variable '{name}' is missing 'source'"
+        if not json_path:
+            return {}, f"Variable '{name}' is missing 'jsonPath'"
+        nullable = spec.get("nullable", True)
+        out[name] = VarDef(
+            name=name,
+            source_path=_normalize_source(source),
+            json_path=str(json_path),
+            nullable=bool(nullable),
+        )
+    return out, None
+
+
 def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
     """
     Parse a workflow YAML file. Returns (steps, error_or_None).
@@ -147,6 +186,10 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
             return [], f"Group '{group_name}' must be a mapping"
 
         group_auth_type, group_auth_raw = _parse_auth_block(group_data.get("auth"))
+
+        group_vars, gv_err = _parse_variables(group_data.get("variables"))
+        if gv_err:
+            return [], f"Group '{group_name}': {gv_err}"
 
         endpoints = group_data.get("endpoints")
         if not endpoints:
@@ -195,6 +238,13 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
             if on_error not in (_ON_ERROR_STOP, _ON_ERROR_CONTINUE):
                 on_error = _ON_ERROR_STOP
 
+            ep_vars, ev_err = _parse_variables(
+                ep_data.get("variables") or entry.get("variables")
+            )
+            if ev_err:
+                return [], f"Endpoint '{path}': {ev_err}"
+            merged_vars = {**group_vars, **ep_vars}  # endpoint overrides group
+
             steps.append(
                 WorkflowStep(
                     path=path,
@@ -206,12 +256,65 @@ def parse_workflow(yaml_path: str) -> tuple[list, str | None]:
                     auth_type=auth_type,
                     auth_raw=auth_raw,
                     on_error=on_error,
+                    variables=merged_vars,
                 )
             )
 
     if not steps:
         return [], "Workflow defines no endpoints"
+    verr = _validate_variables(steps)
+    if verr:
+        return [], verr
     return steps, None
+
+
+def _validate_variables(steps: list) -> str | None:
+    """Validate variable definitions and references across all steps.
+
+    Checks: every ``{{$name}}`` reference has an in-scope definition; each
+    variable's source resolves to exactly one EARLIER step; each ``jsonPath``
+    parses. Returns an error string, or ``None`` if everything checks out.
+    """
+    index = {step.path: i for i, step in enumerate(steps)}
+    for i, step in enumerate(steps):
+        # Every referenced {{$name}} must be defined in scope.
+        referenced: list = VAR_RE.findall(step.url)
+        if step.body:
+            referenced += VAR_RE.findall(step.body)
+        for val in step.headers.values():
+            referenced += VAR_RE.findall(str(val))
+        for name in referenced:
+            if name not in step.variables:
+                return f"Step '{step.path}': undefined variable {name}"
+        # Each defined variable's source must be an earlier step; jsonPath valid.
+        for var in step.variables.values():
+            if var.source_path not in index:
+                return (
+                    f"Step '{step.path}': variable {var.name} source "
+                    f"'{var.source_path}' does not match any endpoint"
+                )
+            if index[var.source_path] >= i:
+                return (
+                    f"Step '{step.path}': variable {var.name} source "
+                    f"'{var.source_path}' must be an earlier step"
+                )
+            jerr = validate_jsonpath(var.json_path)
+            if jerr:
+                return f"Step '{step.path}': variable {var.name}: {jerr}"
+    return None
+
+
+def workflow_var_columns(steps: list) -> list:
+    """Ordered, de-duplicated reserved retry-CSV column names for all variables."""
+    cols: list = []
+    seen: set = set()
+    for step in steps:
+        for var in step.variables.values():
+            col = _var_col(var.source_path, var.name)
+            if col not in seen:
+                seen.add(col)
+                cols.append(col)
+    return cols
 
 
 def _validate_workflow_placeholders(steps: list, fieldnames: list) -> str | None:

@@ -2218,5 +2218,168 @@ class TestPersistVars(unittest.TestCase):
         self.assertEqual(out, {})
 
 
+class TestParseWorkflowVariables(unittest.TestCase):
+    def _yaml(self, content):
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            mode="w", suffix=".yaml", delete=False, prefix="wfvar"
+        )
+        tmp.write(content)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return tmp.name
+
+    _GOOD = """
+workflow:
+  groupA:
+    endpoints:
+      - create:
+          url: https://api/{{id}}
+          method: POST
+  groupB:
+    variables:
+      $newId:
+        source: .workflow.groupA.create
+        jsonPath: $.id
+        nullable: false
+    endpoints:
+      - use:
+          url: https://api/use/{{$newId}}
+          method: POST
+"""
+
+    def test_valid_variable_attached_to_step(self):
+        path = self._yaml(self._GOOD)
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        use = next(s for s in steps if s.path == "groupB/use")
+        self.assertIn("$newId", use.variables)
+        v = use.variables["$newId"]
+        self.assertEqual(v.source_path, "groupA/create")
+        self.assertEqual(v.json_path, "$.id")
+        self.assertFalse(v.nullable)
+
+    def test_nullable_defaults_true(self):
+        path = self._yaml(self._GOOD.replace("        nullable: false\n", ""))
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        use = next(s for s in steps if s.path == "groupB/use")
+        self.assertTrue(use.variables["$newId"].nullable)
+
+    def test_endpoint_overrides_group_variable(self):
+        path = self._yaml(
+            """
+workflow:
+  groupA:
+    endpoints:
+      - create:
+          url: https://api/x
+          method: POST
+  groupB:
+    variables:
+      $v:
+        source: .workflow.groupA.create
+        jsonPath: $.a
+    endpoints:
+      - use:
+          url: https://api/{{$v}}
+          method: POST
+          variables:
+            $v:
+              source: .workflow.groupA.create
+              jsonPath: $.b
+"""
+        )
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        use = next(s for s in steps if s.path == "groupB/use")
+        self.assertEqual(use.variables["$v"].json_path, "$.b")
+
+    def test_name_without_dollar_errors(self):
+        path = self._yaml(self._GOOD.replace("$newId", "newId"))
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+        self.assertIn("$", err)
+
+    def test_undefined_reference_errors(self):
+        path = self._yaml(
+            self._GOOD.replace(
+                "https://api/use/{{$newId}}", "https://api/use/{{$ghost}}"
+            )
+        )
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+        self.assertIn("$ghost", err)
+
+    def test_forward_reference_errors(self):
+        # $newId in groupA references groupB/use which runs LATER
+        path = self._yaml(
+            """
+workflow:
+  groupA:
+    variables:
+      $x:
+        source: .workflow.groupB.use
+        jsonPath: $.id
+    endpoints:
+      - create:
+          url: https://api/{{$x}}
+          method: POST
+  groupB:
+    endpoints:
+      - use:
+          url: https://api/x
+          method: POST
+"""
+        )
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+
+    def test_unknown_source_errors(self):
+        path = self._yaml(
+            self._GOOD.replace(".workflow.groupA.create", ".workflow.groupA.nope")
+        )
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+
+    def test_invalid_jsonpath_errors(self):
+        path = self._yaml(self._GOOD.replace("jsonPath: $.id", "jsonPath: '$.['"))
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+
+    def test_missing_jsonpath_ng_reports_install_error(self):
+        # Simulate jsonpath-ng not installed: a None entry in sys.modules makes
+        # `import jsonpath_ng` raise ImportError, which validate_jsonpath converts
+        # into a clean install message (mirrors the pyyaml-missing behavior).
+        path = self._yaml(self._GOOD)
+        with patch.dict(sys.modules, {"jsonpath_ng": None}):
+            steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNotNone(err)
+        self.assertIn("jsonpath-ng", err)
+
+
+class TestWorkflowVarColumns(unittest.TestCase):
+    def test_dedup_and_order(self):
+        from bulk_post import VarDef, WorkflowStep, workflow_var_columns
+
+        def step(path, *vs):
+            return WorkflowStep(
+                path=path,
+                url="",
+                method="GET",
+                body=None,
+                content_type="application/json",
+                headers={},
+                auth_type="none",
+                auth_raw="",
+                on_error="stop",
+                variables={v.name: v for v in vs},
+            )
+
+        a = VarDef("$x", "g/a", "$.x", True)
+        b = VarDef("$y", "g/a", "$.y", True)
+        cols = workflow_var_columns([step("g/b", a), step("g/c", a, b)])
+        self.assertEqual(cols, ["_bulk_post_var/g/a/$x", "_bulk_post_var/g/a/$y"])
+
+
 if __name__ == "__main__":
     unittest.main()
