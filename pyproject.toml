@@ -39,3 +39,7 @@ warn_return_any = true
 warn_redundant_casts = true
 # Pragmatic start: do NOT enable disallow_untyped_defs / strict yet.
 # Tighten in a later pass once the package split lands.
+
+[[tool.mypy.overrides]]
+module = ["jsonpath_ng.*"]
+ignore_missing_imports = true
