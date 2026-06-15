@@ -2356,6 +2356,45 @@ workflow:
         self.assertIsNotNone(err)
         self.assertIn("jsonpath-ng", err)
 
+    def test_variable_referenced_in_body_and_header_validates(self):
+        # A {{$var}} used in body and header (not just the URL) must be
+        # recognized as an in-scope reference (no "undefined variable" error).
+        path = self._yaml(
+            """
+workflow:
+  groupA:
+    endpoints:
+      - create:
+          url: https://api/x
+          method: POST
+  groupB:
+    variables:
+      $v:
+        source: .workflow.groupA.create
+        jsonPath: $.id
+    endpoints:
+      - use:
+          url: https://api/use
+          method: POST
+          headers:
+            X-Ref: "{{$v}}"
+          body: '{"ref": "{{$v}}"}'
+"""
+        )
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        use = next(s for s in steps if s.path == "groupB/use")
+        self.assertIn("$v", use.variables)
+
+    def test_group_variable_inherited_by_endpoint(self):
+        # A group-level variable is attached to an endpoint that does not
+        # declare its own variables block.
+        path = self._yaml(self._GOOD)
+        steps, err = bulk_post.parse_workflow(path)
+        self.assertIsNone(err)
+        use = next(s for s in steps if s.path == "groupB/use")
+        self.assertEqual(use.variables["$newId"].source_path, "groupA/create")
+
 
 class TestWorkflowVarColumns(unittest.TestCase):
     def test_dedup_and_order(self):
