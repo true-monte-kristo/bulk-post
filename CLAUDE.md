@@ -1,6 +1,6 @@
 # bulk-post
 
-Near-stdlib Python package (`src/bulk_post/`) that fires templated HTTP requests: the request (URL/method/body/headers) carries `{{placeholder}}` slots filled from each CSV row — one request per row, or a multi-step workflow per row in `--workflow` mode. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. External dependencies: `pyyaml`, lazily imported and required solely for `--workflow` mode; `jsonpath-ng`, lazily imported and required solely for workflow response-chaining variables.
+Near-stdlib Python package (`src/bulk_post/`) that fires templated HTTP requests: the request (URL/method/body/headers) carries `{{placeholder}}` slots filled from each CSV row — one request per row, or a multi-step workflow per row in `--workflow` mode. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Runtime dependencies (always installed): `pyyaml`, lazily imported — only exercised on the `--workflow` code path; `jsonpath-ng`, lazily imported — only exercised on the workflow-variables code path.
 
 ## Run & install
 
@@ -19,7 +19,7 @@ uv run bulk-post --help        # run without installing (uv handles the .venv)
 uv run python -m unittest discover tests/   # or plain `python -m unittest discover tests/` inside .venv
 ```
 
-Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML) and `jsonpath-ng` (the workflow variable tests use it). `uv run` provides both from `uv.lock`; the non-workflow tests run on stdlib alone.
+Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML) and `jsonpath-ng` (the workflow variable tests use it). Both are runtime dependencies always present in the environment; `uv run` provides them from `uv.lock`. Tests that exercise neither workflow path use stdlib alone.
 
 ## Code style & conventions
 
@@ -102,7 +102,7 @@ variables:
 
 **Resume/retry** — on row failure, resolved variable values are persisted into reserved retry-CSV columns named `_bulk_post_var/<source_path>/<name>`. Re-running that retry CSV skips completed steps and reads persisted values for variables whose source step was skipped. **Security note:** retry CSVs may contain response-derived data (potentially sensitive) in plaintext and should not be shared or committed.
 
-**Dependency** — `jsonpath-ng` is a runtime dependency, lazily imported only on the workflow-variables code path. Non-workflow use and workflows without `variables:` blocks need no third-party package beyond `pyyaml`.
+**Dependency** — `jsonpath-ng` is a runtime dependency (always installed), lazily imported only on the workflow-variables code path. A plain single-URL run imports neither `pyyaml` nor `jsonpath-ng`, but both are present in the environment.
 
 ## Terminal UI
 
