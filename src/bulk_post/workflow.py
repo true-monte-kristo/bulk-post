@@ -373,10 +373,20 @@ def _fire_workflow_step(
     resume: Callable | None = None,
     responses: dict | None = None,
 ) -> tuple[int | None, str, float, str, str | None, str | None, dict, dict]:
-    """
-    Fire a single workflow step for one CSV row.
-    Returns (status, body, elapsed, final_url, new_auth_header_or_None, req_body, req_headers, resp_headers).
-    Returns (None, err_message, 0, "", None, None, {}, {}) on substitution error.
+    """Fire a single workflow step for one CSV row.
+
+    ``responses`` maps earlier steps' paths (``"group/name"``) to their raw
+    response bodies; it is used to resolve ``{{$var}}`` placeholders defined in
+    ``step.variables`` via JSONPath extraction before rendering the URL, body,
+    and headers with ``render_template``.
+
+    Returns an 8-tuple:
+    ``(status, body, elapsed, final_url, new_auth_header_or_None, req_body,
+    req_headers, resp_headers)``.
+
+    Returns the SKIP-shaped tuple ``(None, err_message, 0.0, "", None, None,
+    {}, {})`` when variable resolution fails (non-nullable null or non-scalar
+    value) OR when a ``{{placeholder}}`` substitution error occurs.
     """
     responses = responses or {}
     var_values, verr = resolve_variables(step, responses, row)

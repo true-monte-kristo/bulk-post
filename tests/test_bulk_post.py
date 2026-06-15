@@ -2466,6 +2466,30 @@ class TestFireWorkflowStepVariables(unittest.TestCase):
         self.assertIn("$id", body)
         mock_http.assert_not_called()
 
+    def test_variable_substituted_into_body_and_header(self):
+        from bulk_post import VarDef, WorkflowStep, _fire_workflow_step
+
+        v = VarDef("$id", "g/a", "$.id", nullable=False)
+        step = WorkflowStep(
+            path="g/b",
+            url="https://api/use",
+            method="POST",
+            body='{"ref": "{{$id}}"}',
+            content_type="application/json",
+            headers={"X-Ref": "{{$id}}"},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={"$id": v},
+        )
+        with patch("bulk_post.workflow.http_request") as mock_http:
+            mock_http.return_value = (200, "ok", 0.01, {}, {})
+            _fire_workflow_step(step, {}, None, 30, responses={"g/a": '{"id": 42}'})
+        # http_request(url, auth, method, body, timeout, content_type, extra_headers)
+        args = mock_http.call_args[0]
+        self.assertEqual(args[3], '{"ref": "42"}')  # req_body
+        self.assertEqual(args[6], {"X-Ref": "42"})  # extra_headers
+
 
 if __name__ == "__main__":
     unittest.main()
