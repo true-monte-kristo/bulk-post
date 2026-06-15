@@ -1,6 +1,6 @@
 # bulk-post
 
-Near-stdlib Python package (`src/bulk_post/`) that fires templated HTTP requests: the request (URL/method/body/headers) carries `{{placeholder}}` slots filled from each CSV row — one request per row, or a multi-step workflow per row in `--workflow` mode. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Only external dependency is `pyyaml`, lazily imported and required solely for `--workflow` mode.
+Near-stdlib Python package (`src/bulk_post/`) that fires templated HTTP requests: the request (URL/method/body/headers) carries `{{placeholder}}` slots filled from each CSV row — one request per row, or a multi-step workflow per row in `--workflow` mode. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. External dependencies: `pyyaml`, lazily imported and required solely for `--workflow` mode; `jsonpath-ng`, lazily imported and required solely for workflow response-chaining variables.
 
 ## Run & install
 
@@ -19,7 +19,7 @@ uv run bulk-post --help        # run without installing (uv handles the .venv)
 uv run python -m unittest discover tests/   # or plain `python -m unittest discover tests/` inside .venv
 ```
 
-Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML). `uv run` provides it from `uv.lock`; the non-workflow tests run on stdlib alone.
+Test suite needs `pyyaml` (the `TestParseWorkflow` cases load real workflow YAML) and `jsonpath-ng` (the workflow variable tests use it). `uv run` provides both from `uv.lock`; the non-workflow tests run on stdlib alone.
 
 ## Code style & conventions
 
@@ -77,6 +77,33 @@ Tokens/credentials are Keycloak SSO values obtained from browser DevTools and ca
 
 `--workflow <yaml>` replaces `--url` with a multi-step workflow. Each CSV row fires all steps in document order; steps within a row are sequential, while `--parallel` runs rows concurrently. Steps are grouped for shared auth; each step has `url`/`method`/`headers`/`body`/`on_error` (`stop` default | `continue`) and may override group auth. On failure the row is written to the retry file with a `_bulk_post_step` column (`group/step`); re-running that CSV resumes mid-workflow by skipping completed steps. See `README.md` and `workflow-example.yaml` for the full schema. The parallel path shares `_run_parallel_main_loop` with single-URL mode, so pause/resume/exit behave identically.
 
+### Workflow response-chaining variables
+
+A step can capture a value from an earlier step's JSON response and reuse it as a `{{$name}}` placeholder in that step's `url`, `headers`, or `body`.
+
+**Declaration** — variables are declared under a `variables:` mapping at group level and/or endpoint level. Endpoint variables override group variables on name conflict. Each variable entry maps a name to a definition:
+
+```yaml
+variables:
+  $id:
+    source: .workflow.groupA.step-name   # leading dot and "workflow." prefix are optional
+    jsonPath: $.data.id                  # full JSONPath; first match is used
+    nullable: false                      # default true; false → step fails on null/no-match
+```
+
+- **`source`** — identifies the earlier endpoint whose JSON response to read, written as `.workflow.<group>.<endpoint>` (or just `<group>/<endpoint>`). The source must resolve to exactly one endpoint that runs before the referencing step; forward and self references are rejected at startup.
+- **`jsonPath`** — a full JSONPath expression powered by `jsonpath-ng` (e.g. `$.id`, `$.items[0].id`). The first match is used.
+- **`nullable`** — defaults to `true`. If the value is null or the path has no match and `nullable: false`, the step fails (row routed to the retry file). If `nullable: true`, it resolves to an empty string. A match that is an object or array (non-scalar) always fails the step.
+- Variable names must start with `$` (e.g. `$id`), and are referenced as `{{$id}}` in URL, headers, and body.
+
+**Lifetime** — variable values are scoped to a single CSV row. The response store is created fresh per row and never crosses rows; with `--parallel` each row is processed by a single worker, so variables are thread-confined.
+
+**Validation** — happens at startup before any HTTP requests: undefined `{{$name}}` references, malformed names, sources that don't resolve to an earlier endpoint, and unparseable JSONPath expressions all produce a clear error and exit `1`.
+
+**Resume/retry** — on row failure, resolved variable values are persisted into reserved retry-CSV columns named `_bulk_post_var/<source_path>/<name>`. Re-running that retry CSV skips completed steps and reads persisted values for variables whose source step was skipped. **Security note:** retry CSVs may contain response-derived data (potentially sensitive) in plaintext and should not be shared or committed.
+
+**Dependency** — `jsonpath-ng` is a runtime dependency, lazily imported only on the workflow-variables code path. Non-workflow use and workflows without `variables:` blocks need no third-party package beyond `pyyaml`.
+
 ## Terminal UI
 
 When running in a real TTY (`termios` available), `_BottomBar` reserves the bottom two rows via an ANSI scroll region: a live progress bar on row `h-1` and a command input on row `h`. With `--debug --parallel`, a third reserved row `h-2` shows live queue depth, active thread count, and ok/fail counters (updated every 0.5 s). In non-TTY debug mode the same stats are printed to stderr. Commands: `/pause`, `/resume`, `/exit` (Tab for autocomplete). In non-TTY mode (pipes, tests) the bar is skipped entirely.
@@ -98,6 +125,13 @@ All names below are importable directly from `bulk_post` (e.g. `from bulk_post i
 - `resolve_auth_header(args, suspend=None, resume=None)` → `Optional[str]` — returns full `Authorization` header value or `None` for auth_type `none`
 - `http_request(url, auth_header, method, body, timeout=30, content_type="application/json")` → `(status_or_None, body, elapsed_s, req_headers, resp_headers)`
 - `_mask_headers(headers)` → `dict` — replaces `Authorization` values with `*****`
+- `VarDef` — dataclass: `name`, `source_path`, `json_path`, `nullable`; represents a single declared workflow variable
+- `resolve_variables(step, responses, row)` → `(dict, err_or_None)` — resolve all variables for a step from the response store and/or persisted retry-CSV columns
+- `persist_vars(steps, responses)` → `dict` — build the `_bulk_post_var/…` retry-CSV columns from the current row's response store
+- `substitute_vars(template, var_values)` → `(str, err_or_None)` — replace `{{$name}}` placeholders with resolved variable values
+- `render_template(template, row, var_values)` → `(str, err_or_None)` — full rendering: CSV column substitution then variable substitution
+- `workflow_var_columns(steps)` → `list` — return the list of `_bulk_post_var/…` column names expected in a retry CSV for the given step list
+- `validate_jsonpath(expr)` → `Optional[str]` — return an error string if `expr` is not a valid JSONPath, else `None` (lazily imports `jsonpath-ng`)
 
 ## Project rules
 

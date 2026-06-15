@@ -1,11 +1,12 @@
 # bulk-post
 
-A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data. You define the request — URL, method, body, headers — with `{{placeholder}}` slots, and each CSV row supplies the values that fill them: one request per row, or a multi-step request workflow per row in `--workflow` mode. Supports bearer or basic auth (default: no auth) with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, and a retry file for failed rows. The only third-party dependency is PyYAML, used solely for `--workflow` mode.
+A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data. You define the request — URL, method, body, headers — with `{{placeholder}}` slots, and each CSV row supplies the values that fill them: one request per row, or a multi-step request workflow per row in `--workflow` mode. Supports bearer or basic auth (default: no auth) with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, and a retry file for failed rows. Third-party dependencies: PyYAML (workflow mode) and jsonpath-ng (workflow response-chaining variables), both lazily imported.
 
 ## Requirements
 
 - Python 3.12+
 - [PyYAML](https://pypi.org/project/PyYAML/) — required only for `--workflow` mode
+- [jsonpath-ng](https://pypi.org/project/jsonpath-ng/) — required only for workflow response-chaining variables
 
 ## Installation
 
@@ -25,7 +26,7 @@ uv tool install . --reinstall
 Or run directly without installing (from the repo root):
 
 ```bash
-python -m bulk_post --help          # workflow mode also needs: pip install pyyaml
+python -m bulk_post --help          # workflow mode also needs: pip install pyyaml jsonpath-ng
 ```
 
 > The top-level `bulk_post.py` file no longer exists. The entry point is the `src/bulk_post/` package — use `python -m bulk_post` or `uv run bulk-post`.
@@ -208,6 +209,51 @@ Key rules:
 
 When a step fails, the row is written to the retry file with an extra column `_bulk_post_step` set to the path of the first failed step (e.g. `groupA/step-name`). Re-running with that retry CSV skips all steps before the failed one, resuming mid-workflow automatically.
 
+### Workflow variables
+
+A step can capture a value from an earlier step's JSON response and pass it as a `{{$name}}` placeholder into that step's `url`, `headers`, or `body`. This lets you chain steps — for example, create a resource in step 1 and use the returned `id` in the URL of step 2.
+
+Variables are declared under a `variables:` key at group level (inherited by all endpoints in the group) and/or at endpoint level (overrides the group on name conflict):
+
+```yaml
+workflow:
+  groupA:
+    auth:
+      type: bearer
+    endpoints:
+      - create-item:
+          url: https://api.example.com/items
+          method: POST
+          body: '{"name": "{{name}}"}'
+
+  groupB:
+    endpoints:
+      - delete-item:
+          # Capture the id from create-item's response at endpoint level
+          variables:
+            $id:
+              source: .workflow.groupA.create-item  # leading dot and "workflow." prefix are optional
+              jsonPath: $.id                        # JSONPath; first match is used
+              nullable: false                       # fail this step if id is missing
+          url: https://api.example.com/items/{{$id}}
+          method: DELETE
+```
+
+**Variable rules:**
+
+- Names must start with `$` (e.g. `$id`) and are referenced as `{{$id}}` in URL, headers, and body.
+- `source` is written as `.workflow.<group>.<endpoint>` (or just `<group>/<endpoint>`). It must refer to an endpoint that runs before the current step — forward and self references are rejected at startup.
+- `jsonPath` uses full JSONPath syntax (powered by [`jsonpath-ng`](https://pypi.org/project/jsonpath-ng/)). Only the first match is used. A match that is an object or array (non-scalar) fails the step.
+- `nullable` defaults to `true`. When `false`, a null value or no-match fails the step (row written to retry file); when `true`, it resolves to an empty string.
+- Variable values are scoped to a single CSV row and are never shared across rows.
+- All variable declarations are validated at startup — undefined references, bad names, unreachable sources, and invalid JSONPath expressions all cause an immediate exit with a clear error.
+
+**Resume/retry with variables:**
+
+When a row fails, any resolved variable values are persisted into reserved retry-CSV columns named `_bulk_post_var/<source_path>/<name>`. Re-running the retry CSV skips completed steps and reads these persisted values for variables whose source step was skipped.
+
+> **Security note:** retry CSVs may contain response-derived data (potentially sensitive) in plaintext. Do not share or commit retry CSVs that were produced from workflows using variables.
+
 ### Example
 
 ```bash
@@ -220,4 +266,4 @@ bulk-post -w workflow.yaml -c rows.csv
 uv run python -m unittest discover tests/
 ```
 
-Tests use stdlib `unittest`, but the workflow-parsing cases require PyYAML. `uv run` installs it from `uv.lock` automatically; if you run `python -m unittest` directly, do so inside a virtualenv that has PyYAML.
+Tests use stdlib `unittest`, but the workflow-parsing cases require PyYAML and the workflow-variable cases require jsonpath-ng. `uv run` installs both from `uv.lock` automatically; if you run `python -m unittest` directly, do so inside a virtualenv that has both packages.

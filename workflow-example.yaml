@@ -42,10 +42,30 @@ workflow:
             Content-Type: application/json
           body: '{ "somethingElse": "{{placeholderB}}"}'
 
-  #example of a no-auth endpoint
+  #example of a no-auth endpoint group using response-chaining variables
   groupC:
+    # A group-level variable is inherited by all endpoints in the group.
+    # Variable names must start with $ and are referenced as {{$name}} in url, headers, or body.
+    variables:
+      $someVariableName:
+        # source identifies the earlier endpoint whose JSON response to read.
+        # Written as .workflow.<group>.<endpoint>; the leading dot and "workflow." prefix are optional.
+        source: .workflow.groupB.call-another-example-api
+        # jsonPath is a full JSONPath expression; the first match is used.
+        jsonPath: $.property
+        # nullable defaults to true; null/no-match resolves to an empty string.
+        nullable: true
     endpoints:
       - call-another-example-api:
-          url: https://yet-another-example.com/yet-another-api/{{placeholderA}}
+          url: https://yet-another-example.com/yet-another-api/{{$id}}
           method: DELETE
           on_error: stop
+
+          # An endpoint-level variable overrides any group variable with the same name.
+          # It can reference any earlier endpoint's response (not just within the same group).
+          variables:
+            $id:
+              source: .workflow.groupB.call-another-example-api
+              jsonPath: $.id
+              # nullable: false means the step fails if the value is null or the path has no match.
+              nullable: false
