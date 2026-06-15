@@ -2566,5 +2566,82 @@ class TestWorkflowRunnerVariables(unittest.TestCase):
         self.assertIn("https://api/use/555", calls)
 
 
+# ---------------------------------------------------------------------------
+# CLI end-to-end: workflow variables
+# ---------------------------------------------------------------------------
+
+
+class TestCliWorkflowVariablesEndToEnd(unittest.TestCase):
+    _WF = """
+workflow:
+  groupA:
+    endpoints:
+      - create:
+          url: https://api/create
+          method: POST
+  groupB:
+    variables:
+      $id:
+        source: .workflow.groupA.create
+        jsonPath: $.id
+        nullable: false
+    endpoints:
+      - use:
+          url: https://api/use/{{$id}}
+          method: POST
+"""
+
+    def _write(self, suffix, content, prefix="t"):
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            mode="w", suffix=suffix, delete=False, prefix=prefix
+        )
+        tmp.write(content)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return tmp.name
+
+    def test_run_succeeds_with_chained_variable(self):
+        csv_path = self._write(".csv", "x\n1\n", prefix="rows")
+        wf_path = self._write(".yaml", self._WF, prefix="wf")
+
+        def fake_http(url, auth, method, body, timeout, content_type, extra):
+            if url == "https://api/create":
+                return (200, '{"id": 7}', 0.01, {}, {})
+            return (200, "ok", 0.01, {}, {})
+
+        with (
+            patch("sys.stdin") as stdin,
+            patch("bulk_post.workflow.http_request", side_effect=fake_http),
+        ):
+            stdin.isatty.return_value = False
+            code = bulk_post.main(["-w", wf_path, "-c", csv_path])
+        self.assertEqual(code, 0)
+
+    def test_failure_persists_variable_column(self):
+        csv_path = self._write(".csv", "x\n1\n", prefix="rows")
+        wf_path = self._write(".yaml", self._WF, prefix="wf")
+        retry_path = Path(csv_path).with_name(Path(csv_path).stem + "_failed.csv")
+        self.addCleanup(lambda: retry_path.unlink(missing_ok=True))
+        self.addCleanup(lambda: retry_path.with_suffix(".log").unlink(missing_ok=True))
+
+        def fake_http(url, auth, method, body, timeout, content_type, extra):
+            if url == "https://api/create":
+                return (200, '{"id": 7}', 0.01, {}, {})
+            return (500, "boom", 0.01, {}, {})  # step B fails -> row written to retry
+
+        with (
+            patch("sys.stdin") as stdin,
+            patch("bulk_post.workflow.http_request", side_effect=fake_http),
+        ):
+            stdin.isatty.return_value = False
+            code = bulk_post.main(["-w", wf_path, "-c", csv_path])
+
+        self.assertEqual(code, 1)
+        with open(retry_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(rows[0]["_bulk_post_var/groupA/create/$id"], "7")
+        self.assertEqual(rows[0]["_bulk_post_step"], "groupB/use")
+
+
 if __name__ == "__main__":
     unittest.main()

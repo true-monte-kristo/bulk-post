@@ -15,11 +15,13 @@ from .csvio import _open_log_file, _open_retry_writer, _skip_rows
 from .runner import _run_loop, _run_parallel
 from .templating import _validate_placeholders
 from .terminal import _HAS_TERMIOS, _BottomBar
+from .variables import _WORKFLOW_VAR_PREFIX
 from .workflow import (
     _WORKFLOW_STEP_COL,
     _resolve_workflow_auth_headers,
     _validate_workflow_placeholders,
     parse_workflow,
+    workflow_var_columns,
 )
 from .workflow_runner import _run_workflow_loop, _run_workflow_parallel
 
@@ -228,10 +230,17 @@ def _run(argv: list[str] | None = None) -> int:
         if werr:
             print(f"[ERROR] {werr}", file=sys.stderr)
             raise _CliError(1)
-        # fieldnames for retry CSV: original columns + _bulk_post_step at the end
-        # (strip any existing _bulk_post_step column first to avoid duplicates)
-        base_fields = [f for f in fieldnames if f != _WORKFLOW_STEP_COL]
-        retry_fieldnames = base_fields + [_WORKFLOW_STEP_COL]
+        # fieldnames for retry CSV: original columns + persisted-variable columns
+        # + _bulk_post_step at the end. Strip any pre-existing reserved columns
+        # first (a resumed retry CSV already carries them) to avoid duplicates.
+        base_fields = [
+            f
+            for f in fieldnames
+            if f != _WORKFLOW_STEP_COL and not f.startswith(_WORKFLOW_VAR_PREFIX)
+        ]
+        retry_fieldnames = (
+            base_fields + workflow_var_columns(steps) + [_WORKFLOW_STEP_COL]
+        )
         verr = _validate_workflow_placeholders(steps, fieldnames)
         if verr:
             print(f"[ERROR] {verr}", file=sys.stderr)
