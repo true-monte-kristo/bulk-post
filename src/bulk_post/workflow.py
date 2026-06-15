@@ -13,8 +13,8 @@ from .auth import (
     resolve_token,
 )
 from .http import http_request
-from .templating import PLACEHOLDER_RE, VAR_RE, substitute
-from .variables import VarDef, _var_col, validate_jsonpath
+from .templating import PLACEHOLDER_RE, VAR_RE, render_template
+from .variables import VarDef, _var_col, resolve_variables, validate_jsonpath
 
 # ---------------------------------------------------------------------------
 # Workflow constants
@@ -371,25 +371,31 @@ def _fire_workflow_step(
     auth_refresh_fn: Callable | None = None,
     suspend: Callable | None = None,
     resume: Callable | None = None,
+    responses: dict | None = None,
 ) -> tuple[int | None, str, float, str, str | None, str | None, dict, dict]:
     """
     Fire a single workflow step for one CSV row.
     Returns (status, body, elapsed, final_url, new_auth_header_or_None, req_body, req_headers, resp_headers).
     Returns (None, err_message, 0, "", None, None, {}, {}) on substitution error.
     """
-    url, err = substitute(step.url, row)
+    responses = responses or {}
+    var_values, verr = resolve_variables(step, responses, row)
+    if verr:
+        return None, verr, 0.0, "", None, None, {}, {}
+
+    url, err = render_template(step.url, row, var_values)
     if err:
         return None, err, 0.0, "", None, None, {}, {}
 
     req_body: str | None = None
     if step.body:
-        req_body, err = substitute(step.body, row)
+        req_body, err = render_template(step.body, row, var_values)
         if err:
             return None, err, 0.0, url, None, None, {}, {}
 
     extra_headers: dict = {}
     for k, v in step.headers.items():
-        val, herr = substitute(str(v), row)
+        val, herr = render_template(str(v), row, var_values)
         if herr:
             return None, herr, 0.0, url, None, None, {}, {}
         extra_headers[k] = val

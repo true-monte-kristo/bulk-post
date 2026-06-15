@@ -2420,5 +2420,52 @@ class TestWorkflowVarColumns(unittest.TestCase):
         self.assertEqual(cols, ["_bulk_post_var/g/a/$x", "_bulk_post_var/g/a/$y"])
 
 
+class TestFireWorkflowStepVariables(unittest.TestCase):
+    def _step(self, url, variables):
+        from bulk_post import WorkflowStep
+
+        return WorkflowStep(
+            path="g/b",
+            url=url,
+            method="GET",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables=variables,
+        )
+
+    def test_variable_substituted_into_url(self):
+        from bulk_post import VarDef, _fire_workflow_step
+
+        v = VarDef("$id", "g/a", "$.id", nullable=False)
+        step = self._step("https://api/use/{{$id}}", {"$id": v})
+        responses = {"g/a": '{"id": 42}'}
+
+        with patch("bulk_post.workflow.http_request") as mock_http:
+            mock_http.return_value = (200, "ok", 0.01, {}, {})
+            result = _fire_workflow_step(step, {}, None, 30, responses=responses)
+        # final_url is index 3 of the returned tuple
+        self.assertEqual(result[3], "https://api/use/42")
+        mock_http.assert_called_once()
+        self.assertEqual(mock_http.call_args[0][0], "https://api/use/42")
+
+    def test_non_nullable_null_is_skip_error(self):
+        from bulk_post import VarDef, _fire_workflow_step
+
+        v = VarDef("$id", "g/a", "$.missing", nullable=False)
+        step = self._step("https://api/use/{{$id}}", {"$id": v})
+
+        with patch("bulk_post.workflow.http_request") as mock_http:
+            result = _fire_workflow_step(step, {}, None, 30, responses={"g/a": "{}"})
+        status, body, _, url = result[0], result[1], result[2], result[3]
+        self.assertIsNone(status)
+        self.assertEqual(url, "")  # routed as a substitution SKIP
+        self.assertIn("$id", body)
+        mock_http.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
