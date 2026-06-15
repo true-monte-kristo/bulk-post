@@ -2100,5 +2100,116 @@ class TestRenderTemplate(unittest.TestCase):
         self.assertEqual(out, "eu7")
 
 
+class TestResolveVariables(unittest.TestCase):
+    def _step(self, *vardefs):
+        from bulk_post import WorkflowStep
+
+        s = WorkflowStep(
+            path="g/b",
+            url="",
+            method="GET",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={v.name: v for v in vardefs},
+        )
+        return s
+
+    def test_live_scalar(self):
+        from bulk_post import VarDef, resolve_variables
+
+        v = VarDef("$id", "g/a", "$.id", nullable=False)
+        vals, err = resolve_variables(
+            self._step(v), {"g/a": '{"id": 42}'}, {}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(vals, {"$id": "42"})
+
+    def test_null_nullable_true_empty(self):
+        from bulk_post import VarDef, resolve_variables
+
+        v = VarDef("$id", "g/a", "$.missing", nullable=True)
+        vals, err = resolve_variables(self._step(v), {"g/a": "{}"}, {})
+        self.assertIsNone(err)
+        self.assertEqual(vals, {"$id": ""})
+
+    def test_null_nullable_false_errors(self):
+        from bulk_post import VarDef, resolve_variables
+
+        v = VarDef("$id", "g/a", "$.missing", nullable=False)
+        vals, err = resolve_variables(self._step(v), {"g/a": "{}"}, {})
+        self.assertIsNotNone(err)
+        self.assertIn("$id", err)
+
+    def test_nonscalar_errors(self):
+        from bulk_post import VarDef, resolve_variables
+
+        v = VarDef("$id", "g/a", "$.obj", nullable=True)
+        vals, err = resolve_variables(
+            self._step(v), {"g/a": '{"obj": {"k": 1}}'}, {}
+        )
+        self.assertIsNotNone(err)
+        self.assertIn("non-scalar", err)
+
+    def test_persisted_value_used_when_source_absent(self):
+        from bulk_post import VarDef, resolve_variables
+
+        v = VarDef("$id", "g/a", "$.id", nullable=False)
+        row = {"_bulk_post_var/g/a/$id": "99"}
+        vals, err = resolve_variables(self._step(v), {}, row)
+        self.assertIsNone(err)
+        self.assertEqual(vals, {"$id": "99"})
+
+    def test_absent_source_no_persist_applies_nullable(self):
+        from bulk_post import VarDef, resolve_variables
+
+        v = VarDef("$id", "g/a", "$.id", nullable=True)
+        vals, err = resolve_variables(self._step(v), {}, {})
+        self.assertIsNone(err)
+        self.assertEqual(vals, {"$id": ""})
+
+
+class TestPersistVars(unittest.TestCase):
+    def _step(self, *vardefs):
+        from bulk_post import WorkflowStep
+
+        return WorkflowStep(
+            path="g/b",
+            url="",
+            method="GET",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={v.name: v for v in vardefs},
+        )
+
+    def test_persists_rendered_scalar(self):
+        from bulk_post import VarDef, persist_vars
+
+        v = VarDef("$id", "g/a", "$.id", nullable=True)
+        out = persist_vars([self._step(v)], {"g/a": '{"id": 42}'})
+        self.assertEqual(out, {"_bulk_post_var/g/a/$id": "42"})
+
+    def test_skips_when_source_not_run(self):
+        from bulk_post import VarDef, persist_vars
+
+        v = VarDef("$id", "g/a", "$.id", nullable=True)
+        out = persist_vars([self._step(v)], {})
+        self.assertEqual(out, {})
+
+    def test_skips_null_match(self):
+        from bulk_post import VarDef, persist_vars
+
+        v = VarDef("$id", "g/a", "$.missing", nullable=True)
+        out = persist_vars([self._step(v)], {"g/a": "{}"})
+        self.assertEqual(out, {})
+
+
 if __name__ == "__main__":
     unittest.main()

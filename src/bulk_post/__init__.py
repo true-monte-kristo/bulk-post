@@ -187,6 +187,24 @@ from .terminal import (
 from .terminal import (
     print_verbose as print_verbose,
 )
+from .variables import (
+    _WORKFLOW_VAR_PREFIX as _WORKFLOW_VAR_PREFIX,
+)
+from .variables import (
+    VarDef as VarDef,
+)
+from .variables import (
+    _var_col as _var_col,
+)
+from .variables import (
+    persist_vars as persist_vars,
+)
+from .variables import (
+    resolve_variables as resolve_variables,
+)
+from .variables import (
+    validate_jsonpath as validate_jsonpath,
+)
 from .workflow import _WORKFLOW_STEP_COL as _WORKFLOW_STEP_COL
 from .workflow import (
     WorkflowStep as WorkflowStep,

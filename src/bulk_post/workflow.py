@@ -57,6 +57,7 @@ class WorkflowStep:
     auth_type: str  # "bearer", "basic", "none"
     auth_raw: str  # raw credential: token or user:pass
     on_error: str  # "stop" or "continue"
+    variables: dict = dataclasses.field(default_factory=dict)  # name -> VarDef
 
 
 def _parse_auth_block(auth: dict | None) -> tuple[str, str]:

@@ -92,3 +92,57 @@ def _render_scalar(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def resolve_variables(step: Any, responses: dict, row: dict) -> tuple[dict, str | None]:
+    """Resolve every in-scope variable of ``step`` to a rendered string.
+
+    Resolution order per variable: live response this run (``responses``) →
+    persisted retry-CSV column (``row``) → null. Returns ``(values, None)`` or
+    ``({}, error)`` if a non-nullable variable is null or any match is non-scalar.
+    """
+    values: dict = {}
+    for name, var in step.variables.items():
+        if var.source_path in responses:
+            extracted = _extract(
+                responses[var.source_path], _compile_jsonpath(var.json_path)
+            )
+        else:
+            persisted = row.get(_var_col(var.source_path, var.name), "")
+            extracted = persisted if persisted != "" else _NULL
+
+        if extracted is _NONSCALAR:
+            return {}, f"Variable {name} resolved to a non-scalar value"
+        if extracted is _NULL:
+            if var.nullable:
+                values[name] = ""
+            else:
+                return {}, f"Variable {name} resolved to null (nullable=false)"
+        else:
+            # Live scalars render here; persisted values are already strings
+            # (str(...) is a no-op for them).
+            values[name] = _render_scalar(extracted)
+    return values, None
+
+
+def persist_vars(steps: list, responses: dict) -> dict:
+    """Resolved values to persist into the retry CSV after a row fails.
+
+    For each variable whose source step completed this run, capture its rendered
+    scalar (skipping null / non-scalar / empty). Keyed by reserved column name;
+    later steps win on duplicate (source, name) keys (same value).
+    """
+    out: dict = {}
+    for step in steps:
+        for var in step.variables.values():
+            if var.source_path not in responses:
+                continue
+            extracted = _extract(
+                responses[var.source_path], _compile_jsonpath(var.json_path)
+            )
+            if extracted is _NULL or extracted is _NONSCALAR:
+                continue
+            rendered = _render_scalar(extracted)
+            if rendered != "":
+                out[_var_col(var.source_path, var.name)] = rendered
+    return out
