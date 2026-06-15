@@ -2646,5 +2646,130 @@ workflow:
         self.assertEqual(rows[0]["_bulk_post_step"], "groupB/use")
 
 
+class TestWorkflowResumeVariables(unittest.TestCase):
+    def _args(self):
+        ns = argparse.Namespace()
+        ns.timeout = 30
+        ns.verbose = False
+        ns.delay = 0
+        ns.debug = False
+        ns.parallel = False
+        return ns
+
+    def _write(self, suffix, content, prefix="t"):
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            mode="w", suffix=suffix, delete=False, prefix=prefix
+        )
+        tmp.write(content)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return tmp.name
+
+    def test_resumed_step_reads_persisted_variable(self):
+        import io
+
+        from bulk_post import VarDef, WorkflowStep, _run_workflow_loop
+
+        a = WorkflowStep(
+            path="groupA/create",
+            url="https://api/create",
+            method="POST",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={},
+        )
+        b = WorkflowStep(
+            path="groupB/use",
+            url="https://api/use/{{$id}}",
+            method="POST",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={"$id": VarDef("$id", "groupA/create", "$.id", False)},
+        )
+        # Resume row: _bulk_post_step points at groupB/use; $id is persisted.
+        row = {
+            "x": "1",
+            "_bulk_post_var/groupA/create/$id": "321",
+            "_bulk_post_step": "groupB/use",
+        }
+        calls = []
+
+        def fake_http(url, auth, method, body, timeout, content_type, extra):
+            calls.append(url)
+            return (200, "ok", 0.01, {}, {})
+
+        log = io.StringIO()
+        with patch("bulk_post.workflow.http_request", side_effect=fake_http):
+            ok, failed, processed = _run_workflow_loop(
+                iter([row]),
+                [a, b],
+                self._args(),
+                {},
+                None,
+                None,
+                None,
+                MagicMock(),
+                log,
+                0,
+                1,
+                ["x", "_bulk_post_var/groupA/create/$id", "_bulk_post_step"],
+            )
+        self.assertEqual((ok, failed), (1, 0))
+        # groupA/create is skipped on resume; only groupB/use fires, with $id=321
+        self.assertEqual(calls, ["https://api/use/321"])
+
+    def test_cli_resume_round_trip_reads_persisted_var(self):
+        # A retry-style CSV whose header already carries the reserved columns,
+        # fed back through main(): groupA/create is skipped (resume marker),
+        # $id comes from the persisted column, run succeeds.
+        wf = """
+workflow:
+  groupA:
+    endpoints:
+      - create:
+          url: https://api/create
+          method: POST
+  groupB:
+    variables:
+      $id:
+        source: .workflow.groupA.create
+        jsonPath: $.id
+        nullable: false
+    endpoints:
+      - use:
+          url: https://api/use/{{$id}}
+          method: POST
+"""
+        csv_content = (
+            "x,_bulk_post_var/groupA/create/$id,_bulk_post_step\n1,321,groupB/use\n"
+        )
+        csv_path = self._write(".csv", csv_content, prefix="resume")
+        wf_path = self._write(".yaml", wf, prefix="wf")
+        calls = []
+
+        def fake_http(url, auth, method, body, timeout, content_type, extra):
+            calls.append(url)
+            return (200, "ok", 0.01, {}, {})
+
+        with (
+            patch("sys.stdin") as stdin,
+            patch("bulk_post.workflow.http_request", side_effect=fake_http),
+        ):
+            stdin.isatty.return_value = False
+            code = bulk_post.main(["-w", wf_path, "-c", csv_path])
+
+        self.assertEqual(code, 0)
+        # groupA/create is skipped; only the resumed step fires, using $id=321
+        self.assertEqual(calls, ["https://api/use/321"])
+
+
 if __name__ == "__main__":
     unittest.main()
