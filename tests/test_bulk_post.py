@@ -2024,5 +2024,52 @@ class TestRenderScalar(unittest.TestCase):
         self.assertEqual(_render_scalar(False), "false")
 
 
+class TestSubstituteVars(unittest.TestCase):
+    def test_replaces_variable(self):
+        from bulk_post import substitute_vars
+
+        out, err = substitute_vars("/users/{{$id}}", {"$id": "42"})
+        self.assertIsNone(err)
+        self.assertEqual(out, "/users/42")
+
+    def test_missing_variable_returns_error(self):
+        from bulk_post import substitute_vars
+
+        out, err = substitute_vars("/users/{{$id}}", {})
+        self.assertIsNotNone(err)
+        self.assertIn("$id", err)
+
+    def test_no_variables_passthrough(self):
+        from bulk_post import substitute_vars
+
+        out, err = substitute_vars("/users/{{id}}", {})
+        self.assertIsNone(err)
+        self.assertEqual(out, "/users/{{id}}")  # {{id}} is a column, not a var
+
+
+class TestRenderTemplate(unittest.TestCase):
+    def test_columns_then_vars(self):
+        from bulk_post import render_template
+
+        out, err = render_template(
+            "/{{region}}/users/{{$id}}", {"region": "eu"}, {"$id": "7"}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out, "/eu/users/7")
+
+    def test_var_value_with_braces_not_reexpanded(self):
+        from bulk_post import render_template
+
+        out, err = render_template("/{{$x}}", {"region": "eu"}, {"$x": "{{region}}"})
+        self.assertIsNone(err)
+        self.assertEqual(out, "/{{region}}")  # var value is NOT re-scanned
+
+    def test_missing_column_error_propagates(self):
+        from bulk_post import render_template
+
+        out, err = render_template("/{{region}}", {}, {})
+        self.assertIsNotNone(err)
+
+
 if __name__ == "__main__":
     unittest.main()

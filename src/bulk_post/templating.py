@@ -8,6 +8,7 @@ import re
 import xml.etree.ElementTree as _ET
 
 PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
+VAR_RE = re.compile(r"\{\{(\$\w+)\}\}")
 
 
 def substitute(template: str, row: dict) -> tuple[str, str | None]:
@@ -20,6 +21,34 @@ def substitute(template: str, row: dict) -> tuple[str, str | None]:
     if missing:
         return template, f"Missing CSV columns for placeholders: {missing}"
     return PLACEHOLDER_RE.sub(lambda m: row[m.group(1)], template), None
+
+
+def substitute_vars(template: str, var_values: dict) -> tuple[str, str | None]:
+    """Replace every ``{{$name}}`` in ``template`` with ``var_values[$name]``.
+
+    Returns ``(result, None)`` on success, or ``(template, error)`` if any
+    referenced variable is absent (a defensive check; parse-time validation
+    should make this unreachable in normal runs).
+    """
+    missing = [m for m in VAR_RE.findall(template) if m not in var_values]
+    if missing:
+        return template, f"Unresolved workflow variables: {missing}"
+    return VAR_RE.sub(lambda m: var_values[m.group(1)], template), None
+
+
+def render_template(
+    template: str, row: dict, var_values: dict
+) -> tuple[str, str | None]:
+    """Resolve ``{{col}}`` (from ``row``) then ``{{$var}}`` (from ``var_values``).
+
+    Columns are substituted first; surviving ``{{$var}}`` tokens are disjoint and
+    replaced in a second pass whose output is not re-scanned, so a variable value
+    containing ``{{...}}``-looking text is never re-expanded.
+    """
+    s, err = substitute(template, row)
+    if err:
+        return template, err
+    return substitute_vars(s, var_values)
 
 
 def _validate_body_template(template: str, content_type: str) -> str | None:

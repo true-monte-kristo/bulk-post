@@ -106,6 +106,15 @@ from .templating import (
 from .templating import (
     substitute as substitute,
 )
+from .templating import (
+    VAR_RE as VAR_RE,
+)
+from .templating import (
+    render_template as render_template,
+)
+from .templating import (
+    substitute_vars as substitute_vars,
+)
 from .terminal import (
     _CMD_EXIT as _CMD_EXIT,
 )
