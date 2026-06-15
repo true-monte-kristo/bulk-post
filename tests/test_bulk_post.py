@@ -1968,5 +1968,61 @@ class TestMainExitCodes(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+class TestVariableExtraction(unittest.TestCase):
+    def _extract(self, body, expr):
+        from bulk_post.variables import _compile_jsonpath, _extract
+
+        return _extract(body, _compile_jsonpath(expr))
+
+    def test_top_level_scalar(self):
+        self.assertEqual(self._extract('{"id": 42}', "$.id"), 42)
+
+    def test_nested_scalar(self):
+        self.assertEqual(self._extract('{"a": {"b": "x"}}', "$.a.b"), "x")
+
+    def test_no_match_is_null(self):
+        from bulk_post.variables import _NULL
+
+        self.assertIs(self._extract('{"id": 1}', "$.missing"), _NULL)
+
+    def test_explicit_null_is_null(self):
+        from bulk_post.variables import _NULL
+
+        self.assertIs(self._extract('{"id": null}', "$.id"), _NULL)
+
+    def test_object_match_is_nonscalar(self):
+        from bulk_post.variables import _NONSCALAR
+
+        self.assertIs(self._extract('{"a": {"b": 1}}', "$.a"), _NONSCALAR)
+
+    def test_unparseable_body_is_null(self):
+        from bulk_post.variables import _NULL
+
+        self.assertIs(self._extract("not json", "$.id"), _NULL)
+
+    def test_empty_body_is_null(self):
+        from bulk_post.variables import _NULL
+
+        self.assertIs(self._extract("", "$.id"), _NULL)
+
+
+class TestRenderScalar(unittest.TestCase):
+    def test_string_passthrough(self):
+        from bulk_post.variables import _render_scalar
+
+        self.assertEqual(_render_scalar("abc"), "abc")
+
+    def test_int(self):
+        from bulk_post.variables import _render_scalar
+
+        self.assertEqual(_render_scalar(42), "42")
+
+    def test_bool_lowercase(self):
+        from bulk_post.variables import _render_scalar
+
+        self.assertEqual(_render_scalar(True), "true")
+        self.assertEqual(_render_scalar(False), "false")
+
+
 if __name__ == "__main__":
     unittest.main()
