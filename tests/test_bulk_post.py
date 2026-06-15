@@ -1,5 +1,6 @@
 """Tests for bulk_post.py — run with: python -m unittest discover tests/"""
 
+import argparse
 import csv
 import os
 import sys
@@ -2489,6 +2490,80 @@ class TestFireWorkflowStepVariables(unittest.TestCase):
         args = mock_http.call_args[0]
         self.assertEqual(args[3], '{"ref": "42"}')  # req_body
         self.assertEqual(args[6], {"X-Ref": "42"})  # extra_headers
+
+
+class TestWorkflowRunnerVariables(unittest.TestCase):
+    def _args(self):
+        ns = argparse.Namespace()
+        ns.timeout = 30
+        ns.verbose = False
+        ns.delay = 0
+        ns.debug = False
+        ns.parallel = False
+        return ns
+
+    def _steps(self):
+        from bulk_post import VarDef, WorkflowStep
+
+        a = WorkflowStep(
+            path="groupA/create",
+            url="https://api/create",
+            method="POST",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={},
+        )
+        b = WorkflowStep(
+            path="groupB/use",
+            url="https://api/use/{{$id}}",
+            method="POST",
+            body=None,
+            content_type="application/json",
+            headers={},
+            auth_type="none",
+            auth_raw="",
+            on_error="stop",
+            variables={"$id": VarDef("$id", "groupA/create", "$.id", False)},
+        )
+        return [a, b]
+
+    def test_second_step_uses_first_response(self):
+        import io
+
+        from bulk_post import _run_workflow_loop
+
+        reader = [{"x": "1"}]  # one row; DictReader-like iterable of dicts
+        calls = []
+
+        def fake_http(url, auth, method, body, timeout, content_type, extra):
+            calls.append(url)
+            if url == "https://api/create":
+                return (200, '{"id": 555}', 0.01, {}, {})
+            return (200, "done", 0.01, {}, {})
+
+        log = io.StringIO()
+        retry = MagicMock()
+        with patch("bulk_post.workflow.http_request", side_effect=fake_http):
+            ok, failed, processed = _run_workflow_loop(
+                iter(reader),
+                self._steps(),
+                self._args(),
+                {},
+                None,
+                None,
+                None,
+                retry,
+                log,
+                0,
+                1,
+                ["x", "_bulk_post_step"],
+            )
+        self.assertEqual((ok, failed), (1, 0))
+        self.assertIn("https://api/use/555", calls)
 
 
 if __name__ == "__main__":

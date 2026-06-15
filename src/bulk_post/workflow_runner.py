@@ -32,6 +32,7 @@ from .runner import (
 )
 from .state import _WorkflowParallelState
 from .terminal import _RED, _RESET, _BottomBar, _out, _poll_cmd, _progress
+from .variables import persist_vars
 from .workflow import _WORKFLOW_STEP_COL, WorkflowStep, _fire_workflow_step
 
 
@@ -61,6 +62,7 @@ def _run_workflow_loop(
         reached_resume = resume_at is None
         row_failed = False
         first_failed_step: str | None = None
+        responses: dict = {}
 
         for step in steps:
             if not reached_resume:
@@ -88,10 +90,14 @@ def _run_workflow_loop(
                 args.timeout,
                 suspend=suspend,
                 resume=resume,
+                responses=responses,
             )
 
             if new_auth is not None:
                 auth_headers[step.path] = new_auth
+
+            if status is not None:
+                responses[step.path] = body
 
             if status is None and not url:
                 # substitution error
@@ -156,6 +162,7 @@ def _run_workflow_loop(
             failed_rows += 1
             retry_row = dict(row)
             retry_row.pop(_WORKFLOW_STEP_COL, None)
+            retry_row.update(persist_vars(steps, responses))
             retry_row[_WORKFLOW_STEP_COL] = first_failed_step
             retry_writer.writerow(retry_row)
         else:
@@ -250,6 +257,7 @@ def _workflow_parallel_worker(
             reached_resume = resume_at is None
             row_failed = False
             first_failed_step: str | None = None
+            responses: dict = {}
 
             for step in steps:
                 if state.stop_event.is_set():
@@ -279,11 +287,15 @@ def _workflow_parallel_worker(
                     step_auth,
                     args.timeout,
                     auth_refresh_fn=auth_refresh_fns.get(step.path),
+                    responses=responses,
                 )
 
                 if new_auth is not None:
                     with state.lock:
                         state.auth_headers[step.path] = new_auth
+
+                if status is not None:
+                    responses[step.path] = body
 
                 if status is None and not url:
                     with state.output_lock:
@@ -363,6 +375,7 @@ def _workflow_parallel_worker(
                 state.failed += 1
                 retry_row = dict(row)
                 retry_row.pop(_WORKFLOW_STEP_COL, None)
+                retry_row.update(persist_vars(steps, responses))
                 retry_row[_WORKFLOW_STEP_COL] = first_failed_step
                 retry_writer.writerow(retry_row)
             else:
