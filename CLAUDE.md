@@ -71,8 +71,6 @@ Three auth types via `--auth-type` / `-a` (default `none`):
 - **basic** — `Authorization: Basic <base64>`. Credentials resolved: `--user` flag → `BULK_USER` env → interactive prompt. On 401, prompts for new credentials, then retries.
 - **none** — no `Authorization` header sent.
 
-Tokens/credentials are Keycloak SSO values obtained from browser DevTools and cannot be fetched programmatically.
-
 ## Workflow mode
 
 `--workflow <yaml>` replaces `--url` with a multi-step workflow. Each CSV row fires all steps in document order; steps within a row are sequential, while `--parallel` runs rows concurrently. Steps are grouped for shared auth; each step has `url`/`method`/`headers`/`body`/`on_error` (`stop` default | `continue`) and may override group auth. On failure the row is written to the retry file with a `_bulk_post_step` column (`group/step`); re-running that CSV resumes mid-workflow by skipping completed steps. See `README.md` and `workflow-example.yaml` for the full schema. The parallel path shares `_run_parallel_main_loop` with single-URL mode, so pause/resume/exit behave identically.
