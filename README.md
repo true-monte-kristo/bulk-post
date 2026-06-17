@@ -15,17 +15,20 @@ A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data. 
 
 ## Installation
 
-Install globally with [uv](https://docs.astral.sh/uv/):
+Install from [PyPI](https://pypi.org/project/bulk-post/):
 
 ```bash
-uv tool install .
+uv tool install bulk-post   # or: pipx install bulk-post  /  pip install bulk-post
 bulk-post --help
 ```
 
-After changing the code, re-install with:
+### From source
+
+Install globally from a checkout with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install . --reinstall
+uv tool install .
+uv tool install . --reinstall   # re-install after changing the code
 ```
 
 Or run directly without installing (from the repo root):
