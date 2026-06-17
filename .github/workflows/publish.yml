@@ -14,6 +14,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/bulk-post
     permissions:
+      contents: read   # actions/checkout needs this; declaring permissions resets unlisted scopes to none
       id-token: write  # required for OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
