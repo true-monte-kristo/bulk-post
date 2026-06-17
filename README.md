@@ -1,5 +1,10 @@
 # bulk-post
 
+[![CI](https://github.com/true-monte-kristo/bulk-post/actions/workflows/ci.yml/badge.svg)](https://github.com/true-monte-kristo/bulk-post/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![Security: report a vulnerability](https://img.shields.io/badge/security-report%20a%20vulnerability-red.svg)](https://github.com/true-monte-kristo/bulk-post/security/advisories/new)
+
 A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data. You define the request — URL, method, body, headers — with `{{placeholder}}` slots, and each CSV row supplies the values that fill them: one request per row, or a multi-step request workflow per row in `--workflow` mode. Supports bearer or basic auth (default: no auth) with automatic 401 re-prompt, a live terminal UI with pause/resume, parallel execution, and a retry file for failed rows. Third-party dependencies: PyYAML and jsonpath-ng — both always installed, but lazily imported (PyYAML only on the `--workflow` code path, jsonpath-ng only on the workflow-variables code path).
 
 ## Requirements

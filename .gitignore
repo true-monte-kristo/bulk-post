@@ -9,3 +9,7 @@ __pycache__/
 
 # Local test fixtures (not part of the repo)
 typicode-test-workflow.yaml
+
+# Internal development notes — kept locally, not part of the public repo
+docs/superpowers/
+PYTHON_BEST_PRACTICES.md
