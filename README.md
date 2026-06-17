@@ -29,8 +29,6 @@ Or run directly without installing (from the repo root):
 python -m bulk_post --help          # ensure pyyaml and jsonpath-ng are installed (uv run handles this)
 ```
 
-> The top-level `bulk_post.py` file no longer exists. The entry point is the `src/bulk_post/` package — use `python -m bulk_post` or `uv run bulk-post`.
-
 ## Usage
 
 ```
@@ -119,7 +117,7 @@ Select the auth method with `--auth-type` / `-a` (default: `none`):
 
 Pass `--auth-type bearer` (or `-a bearer`). Token resolution order: `--token` / `-t` flag → `BULK_TOKEN` env var → interactive prompt at startup.
 
-If the server returns **401** mid-run, the script pauses, prompts for a fresh token, and retries the failed row automatically. Tokens are Keycloak SSO tokens obtained from browser DevTools and cannot be fetched programmatically.
+If the server returns **401** mid-run, the script pauses, prompts for a fresh token, and retries the failed row automatically. This is handy when tokens are short-lived SSO bearer tokens that must be copied manually (e.g. from browser DevTools) and cannot be fetched programmatically.
 
 ### Basic auth
 

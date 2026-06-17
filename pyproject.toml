@@ -1,11 +1,33 @@
 [project]
 name = "bulk-post"
 version = "0.1.0"
+description = "A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data, one request (or a multi-step workflow) per row."
+readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Valerii Kirichenko", email = "true.monte.kristo@gmail.com" }]
+keywords = ["http", "csv", "cli", "bulk", "requests", "templating", "workflow"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Utilities",
+]
 dependencies = [
     "jsonpath-ng>=1.8.0",
     "pyyaml",
 ]
+
+[project.urls]
+Homepage = "https://github.com/true-monte-kristo/bulk-post"
+Repository = "https://github.com/true-monte-kristo/bulk-post"
+Issues = "https://github.com/true-monte-kristo/bulk-post/issues"
 
 [project.scripts]
 bulk-post = "bulk_post:main"
