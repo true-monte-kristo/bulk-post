@@ -15,10 +15,23 @@ A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data. 
 
 ## Installation
 
+### From PyPI
+
 Install from [PyPI](https://pypi.org/project/bulk-post/):
 
 ```bash
 uv tool install bulk-post   # or: pipx install bulk-post  /  pip install bulk-post
+bulk-post --help
+```
+
+### With Homebrew
+
+Install from the [tap](https://github.com/true-monte-kristo/homebrew-tap):
+
+```bash
+brew tap true-monte-kristo/tap
+brew trust true-monte-kristo/tap   # Homebrew 6.x requires trusting third-party taps once
+brew install bulk-post
 bulk-post --help
 ```
 
