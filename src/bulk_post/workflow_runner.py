@@ -223,6 +223,7 @@ def _workflow_parallel_worker(
     bar: _BottomBar | None,
     retry_writer: Any,
     log_file: IO[str],
+    offset: int,
     total_rows: int,
     auth_refresh_fns: dict,
     debug: bool = False,
@@ -365,7 +366,7 @@ def _workflow_parallel_worker(
             with state.lock:
                 state.in_flight -= 1
                 state.processed += 1
-                absolute = state.processed
+                absolute = offset + state.processed
 
         with state.output_lock:
             _progress(bar, absolute, total_rows)
@@ -449,6 +450,7 @@ def _run_workflow_parallel(
                 bar,
                 retry_writer,
                 log_file,
+                offset,
                 total_rows,
                 auth_refresh_fns,
                 debug,

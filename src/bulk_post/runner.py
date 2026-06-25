@@ -318,6 +318,7 @@ def _parallel_worker(
     resume: Callable | None,
     retry_writer: Any,
     log_file: IO[str],
+    offset: int,
     total_rows: int,
     auth_refresh_fn: Callable,
     debug: bool = False,
@@ -377,7 +378,7 @@ def _parallel_worker(
 
         with state.lock:
             state.processed += 1
-            absolute = state.processed
+            absolute = offset + state.processed
 
         if status is None and not url:
             with state.output_lock:
@@ -588,6 +589,7 @@ def _run_parallel(
                 resume,
                 retry_writer,
                 log_file,
+                offset,
                 total_rows,
                 auth_refresh_fn,
                 debug,
