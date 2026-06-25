@@ -1230,6 +1230,48 @@ class TestParallelRun(unittest.TestCase):
         self.assertNotIn("http://t.com/1", urls_called)
         self.assertIn("http://t.com/10", urls_called)
 
+    def test_parallel_progress_accounts_for_offset(self):
+        rows = [{"id": str(i)} for i in range(1, 11)]
+        csv_path = self._write_csv("data.csv", rows)
+        progress_calls = []
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "bp",
+                    "-u",
+                    "http://t.com/{{id}}",
+                    "-c",
+                    csv_path,
+                    "-a",
+                    "none",
+                    "--parallel",
+                    "-n",
+                    "3",
+                    "--offset",
+                    "5",
+                ],
+            ),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")),
+            patch(
+                "bulk_post.runner._progress",
+                side_effect=lambda bar, current, total: progress_calls.append(
+                    (current, total)
+                ),
+            ),
+            patch("builtins.print"),
+        ):
+            bulk_post._run()
+
+        # Progress must count absolute rows (offset + processed) against the
+        # total, so it reaches 100% (10/10) rather than maxing at 5/10.
+        self.assertTrue(progress_calls)
+        self.assertEqual(progress_calls[0][1], 10)
+        self.assertEqual(max(c for c, _ in progress_calls), 10)
+        self.assertEqual(min(c for c, _ in progress_calls), 6)
+
     def test_debug_flag_prefixes_thread_name_in_output(self):
         rows = [{"id": str(i)} for i in range(1, 4)]
         csv_path = self._write_csv("data.csv", rows)
@@ -1683,6 +1725,58 @@ workflow:
         self.assertIn("https://api.example.com/1/confirm", calls)
         self.assertIn("https://api.example.com/2", calls)
         self.assertIn("https://api.example.com/2/confirm", calls)
+
+    def test_parallel_progress_accounts_for_offset(self):
+        csv_path = self._write_csv("rows", [{"id": str(i)} for i in range(1, 11)])
+        wf_path = self._write_yaml(
+            "wf",
+            """
+workflow:
+  groupA:
+    endpoints:
+      - step-one:
+          url: https://api.example.com/{{id}}
+          method: GET
+""",
+        )
+        progress_calls = []
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "bp",
+                    "--workflow",
+                    wf_path,
+                    "-c",
+                    csv_path,
+                    "-a",
+                    "none",
+                    "--parallel",
+                    "-n",
+                    "3",
+                    "--offset",
+                    "5",
+                ],
+            ),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: self._mock_resp(200)),
+            patch(
+                "bulk_post.workflow_runner._progress",
+                side_effect=lambda bar, current, total: progress_calls.append(
+                    (current, total)
+                ),
+            ),
+            patch("builtins.print"),
+        ):
+            bulk_post._run()
+
+        # Progress must count absolute rows (offset + processed), so it reaches
+        # 100% (10/10) rather than maxing at 5/10.
+        self.assertTrue(progress_calls)
+        self.assertEqual(progress_calls[0][1], 10)
+        self.assertEqual(max(c for c, _ in progress_calls), 10)
+        self.assertEqual(min(c for c, _ in progress_calls), 6)
 
     def test_step_failure_stop_writes_retry_with_step_col(self):
         csv_path = self._write_csv("rows", [{"id": "1"}])
