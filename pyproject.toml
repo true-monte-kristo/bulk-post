@@ -1,6 +1,6 @@
 [project]
 name = "bulk-post"
-version = "0.1.0"
+version = "0.1.1"
 description = "A near-stdlib Python CLI that fires templated HTTP requests driven by CSV data, one request (or a multi-step workflow) per row."
 readme = "README.md"
 requires-python = ">=3.12"
