@@ -1760,7 +1760,10 @@ workflow:
                 ],
             ),
             patch("sys.stdin.isatty", return_value=False),
-            patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: self._mock_resp(200)),
+            patch(
+                "urllib.request.urlopen",
+                side_effect=lambda req, timeout=None: self._mock_resp(200),
+            ),
             patch(
                 "bulk_post.workflow_runner._progress",
                 side_effect=lambda bar, current, total: progress_calls.append(
