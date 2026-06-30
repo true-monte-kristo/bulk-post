@@ -138,3 +138,4 @@ Detailed, prescriptive rules for building features (auto-imported into context):
 @.claude/rules/cli.md
 @.claude/rules/error-handling.md
 @.claude/rules/testing-and-deps.md
+@.claude/rules/commits.md
