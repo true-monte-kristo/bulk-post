@@ -1,0 +1,54 @@
+name: Release Please
+
+# On every push to master, keep an up-to-date "release PR" that bumps the
+# version (from Conventional Commit messages) and updates CHANGELOG.md.
+# Merging that PR creates the git tag + GitHub Release, which in turn triggers
+# publish.yml (PyPI + Homebrew tap).
+#
+# Uses a user/app token (secrets.RELEASE_TOKEN) rather than the default
+# GITHUB_TOKEN so that (a) the release PR triggers CI and (b) the Release it
+# publishes triggers publish.yml. The default token cannot do either.
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Keep uv.lock's project version in step with pyproject.toml inside the
+      # release PR. Runs only while a release PR is open (not on the merge that
+      # cuts the release). release-please force-updates its branch each run, so
+      # this re-applies every cycle.
+      - if: ${{ steps.release.outputs.pr }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - if: ${{ steps.release.outputs.pr }}
+        uses: astral-sh/setup-uv@v5
+      - if: ${{ steps.release.outputs.pr }}
+        name: Sync uv.lock to the new version
+        run: |
+          set -euo pipefail
+          uv lock
+          if git diff --quiet uv.lock; then
+            echo "uv.lock already in sync."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "chore: sync uv.lock to release version"
+          git push

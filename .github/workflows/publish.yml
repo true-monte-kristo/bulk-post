@@ -1,11 +1,13 @@
 name: Publish to PyPI
 
-# Publishes the package to PyPI whenever a GitHub Release is published,
-# using PyPI Trusted Publishing (OIDC) — no API tokens stored anywhere.
+# Runs when a GitHub Release is published (release-please cuts these when its
+# release PR is merged). Publishes to PyPI via Trusted Publishing (OIDC), then
+# bumps the Homebrew tap. workflow_dispatch is kept only as a manual escape
+# hatch — note it builds the default branch, not a tag.
 on:
   release:
     types: [published]
-  workflow_dispatch:  # allow manual publishing (e.g. the first release, or a re-run)
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -24,3 +26,71 @@ jobs:
         run: uv build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Stay idempotent: a re-run for an already-uploaded version is a no-op
+          # rather than a "File already exists" failure.
+          skip-existing: true
+
+  homebrew:
+    # Bump the tap only for real releases, and only after PyPI has the sdist.
+    needs: publish
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bump tap formula
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          echo "Updating Homebrew formula to $version"
+
+          # PyPI's JSON API / CDN can lag a few seconds behind the upload above;
+          # retry until the sdist for this version is resolvable.
+          url=""; sha=""
+          for i in $(seq 1 30); do
+            if json="$(curl -fsSL "https://pypi.org/pypi/bulk-post/${version}/json")"; then
+              meta="$(printf '%s' "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); s=[u for u in d['urls'] if u['packagetype']=='sdist']; print(s[0]['url'], s[0]['digests']['sha256']) if s else ''")"
+              if [ -n "$meta" ]; then url="${meta%% *}"; sha="${meta##* }"; break; fi
+            fi
+            echo "PyPI not ready for ${version} (attempt ${i}); sleeping 10s..."
+            sleep 10
+          done
+          [ -n "$url" ] && [ -n "$sha" ] || { echo "::error::sdist for ${version} not found on PyPI"; exit 1; }
+          echo "sdist: $url"
+
+          git clone "https://x-access-token:${TOKEN}@github.com/true-monte-kristo/homebrew-tap.git" tap
+
+          # Edit the formula in Python (portable, exact). Replaces only the
+          # package's url + the first sha256; resource blocks use other dist
+          # names and come afterwards, so they are left untouched.
+          URL="$url" SHA="$sha" VERSION="$version" python3 - <<'PY'
+          import os, re, pathlib
+          f = pathlib.Path("tap/Formula/bulk-post.rb")
+          s = f.read_text()
+          url, sha, ver = os.environ["URL"], os.environ["SHA"], os.environ["VERSION"]
+          s, n1 = re.subn(r'(url ")https://files\.pythonhosted\.org/[^"]*/bulk_post-[^"]*\.tar\.gz(")', rf'\g<1>{url}\g<2>', s, count=1)
+          s, n2 = re.subn(r'sha256 "[0-9a-f]{64}"', f'sha256 "{sha}"', s, count=1)
+          s, n3 = re.subn(r'assert_match "\d+\.\d+\.\d+"', f'assert_match "{ver}"', s, count=1)
+          assert (n1, n2, n3) == (1, 1, 1), f"unexpected match counts: {(n1, n2, n3)}"
+          f.write_text(s)
+          PY
+
+          # Sanity: the new version url and sha must now be present.
+          grep -q "bulk_post-${version}.tar.gz" tap/Formula/bulk-post.rb
+          grep -q "$sha" tap/Formula/bulk-post.rb
+
+          cd tap
+          if git diff --quiet; then
+            echo "Formula already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "bulk-post: update to ${version}"
+          git push origin HEAD:main
+
+# NOTE: if a release ever changes runtime dependencies, the resource blocks in
+# the formula must be regenerated manually (brew update-python-resources); this
+# job only bumps the package url/sha/version.

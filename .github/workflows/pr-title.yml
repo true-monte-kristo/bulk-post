@@ -1,0 +1,20 @@
+name: Lint PR title
+
+# release-please reads commit messages to compute the next version. With
+# squash-merge, the squashed commit message comes from the PR title, so the
+# title must be a valid Conventional Commit (e.g. "fix: ...", "feat: ...").
+# This check fails fast on non-conforming titles.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
