@@ -35,8 +35,9 @@ def detect_delimiter(path: str) -> str:
 def count_csv_rows(path: str) -> int:
     """Count data rows (excluding the header); returns 0 if the file can't be read."""
     try:
+        delimiter = detect_delimiter(path)
         with open(path, newline="", encoding="utf-8") as f:
-            return sum(1 for _ in csv.DictReader(f))
+            return sum(1 for _ in csv.DictReader(f, delimiter=delimiter))
     except OSError:
         return 0
 

@@ -129,6 +129,12 @@ class TestCountCsvRows(unittest.TestCase):
     def test_nonexistent_file_returns_zero(self):
         self.assertEqual(bulk_post.count_csv_rows("/tmp/__no_such_file__.csv"), 0)
 
+    def test_semicolon_file_counted(self):
+        p = os.path.join(tempfile.mkdtemp(), "s.csv")
+        with open(p, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;a\n2;b\n3;c\n")
+        self.assertEqual(bulk_post.count_csv_rows(p), 3)
+
 
 # ---------------------------------------------------------------------------
 # detect_delimiter
