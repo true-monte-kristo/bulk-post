@@ -1171,6 +1171,44 @@ class TestRun(unittest.TestCase):
         self.assertEqual(rows[0]["id"], "1")
         self.assertEqual(rows[0]["name"], "alice")
 
+    def test_info_message_emitted_for_non_comma_delimiter(self):
+        import contextlib
+        import io
+
+        csv_path = os.path.join(self.tmpdir, "s.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;alice\n")
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            bulk_post._run()
+
+        self.assertIn("Detected ';' as the CSV delimiter", stderr.getvalue())
+
+    def test_no_info_message_for_comma_delimiter(self):
+        import contextlib
+        import io
+
+        csv_path = self._write_csv("c.csv", [{"id": "1"}])
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            bulk_post._run()
+
+        self.assertNotIn("as the CSV delimiter", stderr.getvalue())
+
 
 # ---------------------------------------------------------------------------
 # --parallel integration tests
