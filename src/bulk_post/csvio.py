@@ -11,6 +11,27 @@ from .http import _mask_headers
 from .terminal import _BottomBar, _out
 
 
+def detect_delimiter(path: str) -> str:
+    """Best-effort detect the CSV delimiter, considering ``, ; \\t |``.
+
+    Returns the detected single-character delimiter, or ``","`` when the file is
+    empty, unreadable, or the delimiter cannot be determined — so comma files
+    behave exactly as before.
+    """
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            sample = f.read(65536)
+    except OSError:
+        return ","
+    if not sample.strip():
+        return ","
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        return ","
+    return dialect.delimiter
+
+
 def count_csv_rows(path: str) -> int:
     """Count data rows (excluding the header); returns 0 if the file can't be read."""
     try:

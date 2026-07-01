@@ -131,6 +131,70 @@ class TestCountCsvRows(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# detect_delimiter
+# ---------------------------------------------------------------------------
+
+
+class TestDetectDelimiter(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write(self, name, content):
+        p = os.path.join(self.tmpdir, name)
+        with open(p, "w", newline="", encoding="utf-8") as f:
+            f.write(content)
+        return p
+
+    def test_comma(self):
+        p = self._write("c.csv", "id,name\n1,alice\n2,bob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_semicolon(self):
+        p = self._write("s.csv", "id;name\n1;alice\n2;bob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), ";")
+
+    def test_tab(self):
+        p = self._write("t.csv", "id\tname\n1\talice\n2\tbob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), "\t")
+
+    def test_pipe(self):
+        p = self._write("p.csv", "id|name\n1|alice\n2|bob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), "|")
+
+    def test_single_column_falls_back_to_comma(self):
+        p = self._write("one.csv", "id\n1\n2\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_empty_file_falls_back_to_comma(self):
+        p = self._write("empty.csv", "")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_missing_file_falls_back_to_comma(self):
+        p = os.path.join(self.tmpdir, "nope.csv")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_quoted_field_with_embedded_delimiter(self):
+        p = self._write("q.csv", 'id;note\n1;"a,b"\n2;"c,d"\n')
+        self.assertEqual(bulk_post.detect_delimiter(p), ";")
+
+    def test_retry_writer_uses_delimiter(self):
+        from pathlib import Path
+
+        p = Path(self.tmpdir) / "r.csv"
+        f, w = bulk_post._open_retry_writer(p, ["id", "name"], delimiter=";")
+        w.writerow({"id": "1", "name": "alice"})
+        f.close()
+        lines = p.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0], "id;name")
+        self.assertEqual(lines[1], "1;alice")
+
+
+# ---------------------------------------------------------------------------
 # resolve_token
 # ---------------------------------------------------------------------------
 

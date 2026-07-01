@@ -69,6 +69,9 @@ from .csvio import (
 from .csvio import (
     count_csv_rows as count_csv_rows,
 )
+from .csvio import (
+    detect_delimiter as detect_delimiter,
+)
 from .http import _mask_headers as _mask_headers
 from .http import http_request as http_request
 from .runner import (
