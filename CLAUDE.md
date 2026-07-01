@@ -1,6 +1,6 @@
 # bulk-post
 
-Near-stdlib Python package (`src/bulk_post/`) that fires templated HTTP requests: the request (URL/method/body/headers) carries `{{placeholder}}` slots filled from each CSV row — one request per row, or a multi-step workflow per row in `--workflow` mode. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Runtime dependencies (always installed): `pyyaml`, lazily imported — only exercised on the `--workflow` code path; `jsonpath-ng`, lazily imported — only exercised on the workflow-variables code path.
+Near-stdlib Python package (`src/bulk_post/`) that fires templated HTTP requests: the request (URL/method/body/headers) carries `{{placeholder}}` slots filled from each CSV row — one request per row, or a multi-step workflow per row in `--workflow` mode. The input CSV delimiter is auto-detected among comma, semicolon, tab, and pipe (falling back to comma when detection is uncertain); there is no delimiter flag. Entry point is `bulk_post.cli:main`, exposed as the `bulk-post` console script. The code is split across submodules: `cli`, `http`, `auth`, `templating`, `csvio`, `terminal`, `state`, `workflow`, `runner`, `workflow_runner`; `__init__` re-exports all public names. Runtime dependencies (always installed): `pyyaml`, lazily imported — only exercised on the `--workflow` code path; `jsonpath-ng`, lazily imported — only exercised on the workflow-variables code path.
 
 ## Run & install
 
@@ -115,6 +115,7 @@ All names below are importable directly from `bulk_post` (e.g. `from bulk_post i
 - `_get_suggestion(buf)` — completion suffix for partial `/command`
 - `substitute(template, row)` → `(str, err_or_None)` — `{{var}}` substitution
 - `count_csv_rows(path)` → `int` — data rows excluding header; 0 on error
+- `detect_delimiter(path)` → `str` — best-effort CSV delimiter detection (`, ; tab |`); returns `","` when the file is empty, unreadable, or the delimiter can't be determined
 - `parse_workflow(yaml_path)` → `(steps, err_or_None)` — load/validate a workflow YAML into an ordered step list (lazily imports `pyyaml`)
 - `resolve_token(flag_value, suspend=None, resume=None)` → `str` — bearer token from flag → `BULK_TOKEN` env → prompt
 - `prompt_new_token(suspend=None, resume=None)` → `str` — patch this in tests, not `input`
