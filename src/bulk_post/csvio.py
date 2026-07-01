@@ -43,11 +43,14 @@ def count_csv_rows(path: str) -> int:
 
 
 def _open_retry_writer(
-    retry_path: pathlib.Path, fieldnames: list
+    retry_path: pathlib.Path, fieldnames: list, delimiter: str = ","
 ) -> tuple[IO[str], Any]:
-    """Open the retry CSV and write its header. Returns (file, writer)."""
+    """Open the retry CSV and write its header. Returns (file, writer).
+
+    ``delimiter`` matches the input CSV so the retry file round-trips.
+    """
     f = open(retry_path, "w", newline="", encoding="utf-8")  # noqa: SIM115  # caller owns lifecycle
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=delimiter)
     writer.writeheader()
     return f, writer
 
