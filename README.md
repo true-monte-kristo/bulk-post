@@ -124,6 +124,8 @@ bulk-post -u "https://api.example.com/items/{{id}}" -c items.csv -o 47
 
 The CSV must have a header row. Column names are used as placeholder names in `--url`, `--body`, and `--header` values. Every `{{placeholder}}` in the URL, body, or header values must match a column name; the script exits with an error if any are missing.
 
+The input delimiter is detected automatically (comma, semicolon, tab, or pipe), falling back to comma when it can't be determined. The failed-rows retry CSV is written with the same delimiter as the input. There is no delimiter flag.
+
 ```csv
 id,reason
 1001,duplicate

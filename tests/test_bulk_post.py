@@ -129,6 +129,76 @@ class TestCountCsvRows(unittest.TestCase):
     def test_nonexistent_file_returns_zero(self):
         self.assertEqual(bulk_post.count_csv_rows("/tmp/__no_such_file__.csv"), 0)
 
+    def test_semicolon_file_counted(self):
+        p = os.path.join(tempfile.mkdtemp(), "s.csv")
+        with open(p, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;a\n2;b\n3;c\n")
+        self.assertEqual(bulk_post.count_csv_rows(p), 3)
+
+
+# ---------------------------------------------------------------------------
+# detect_delimiter
+# ---------------------------------------------------------------------------
+
+
+class TestDetectDelimiter(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write(self, name, content):
+        p = os.path.join(self.tmpdir, name)
+        with open(p, "w", newline="", encoding="utf-8") as f:
+            f.write(content)
+        return p
+
+    def test_comma(self):
+        p = self._write("c.csv", "id,name\n1,alice\n2,bob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_semicolon(self):
+        p = self._write("s.csv", "id;name\n1;alice\n2;bob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), ";")
+
+    def test_tab(self):
+        p = self._write("t.csv", "id\tname\n1\talice\n2\tbob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), "\t")
+
+    def test_pipe(self):
+        p = self._write("p.csv", "id|name\n1|alice\n2|bob\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), "|")
+
+    def test_single_column_falls_back_to_comma(self):
+        p = self._write("one.csv", "id\n1\n2\n")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_empty_file_falls_back_to_comma(self):
+        p = self._write("empty.csv", "")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_missing_file_falls_back_to_comma(self):
+        p = os.path.join(self.tmpdir, "nope.csv")
+        self.assertEqual(bulk_post.detect_delimiter(p), ",")
+
+    def test_quoted_field_with_embedded_delimiter(self):
+        p = self._write("q.csv", 'id;note\n1;"a,b"\n2;"c,d"\n')
+        self.assertEqual(bulk_post.detect_delimiter(p), ";")
+
+    def test_retry_writer_uses_delimiter(self):
+        from pathlib import Path
+
+        p = Path(self.tmpdir) / "r.csv"
+        f, w = bulk_post._open_retry_writer(p, ["id", "name"], delimiter=";")
+        w.writerow({"id": "1", "name": "alice"})
+        f.close()
+        lines = p.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[0], "id;name")
+        self.assertEqual(lines[1], "1;alice")
+
 
 # ---------------------------------------------------------------------------
 # resolve_token
@@ -1057,6 +1127,87 @@ class TestRun(unittest.TestCase):
         self.assertEqual(
             auth_headers[1], "Basic " + base64.b64encode(b"new:pass").decode()
         )
+
+    def test_semicolon_delimited_input(self):
+        csv_path = os.path.join(self.tmpdir, "s.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;alice\n2;bob\n")
+        urls = []
+
+        def capture(req, timeout=None):
+            urls.append(req.full_url)
+            return self._mock_resp(200, b"ok")
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", side_effect=capture),
+            patch("builtins.print"),
+        ):
+            bulk_post._run()
+
+        self.assertIn("http://t.com/1", urls)
+        self.assertIn("http://t.com/2", urls)
+
+    def test_semicolon_retry_file_roundtrips(self):
+        csv_path = os.path.join(self.tmpdir, "s.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;alice\n")
+        retry_path = Path(csv_path).parent / "s_failed.csv"
+        err = urllib.error.HTTPError("http://t.com/1", 500, "Err", {}, BytesIO(b"boom"))
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", side_effect=err),
+            patch("builtins.print"),
+        ):
+            code = bulk_post.main()
+
+        self.assertEqual(code, 1)
+        self.assertTrue(retry_path.exists())
+        with open(retry_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f, delimiter=";"))
+        self.assertEqual(rows[0]["id"], "1")
+        self.assertEqual(rows[0]["name"], "alice")
+
+    def test_info_message_emitted_for_non_comma_delimiter(self):
+        import contextlib
+        import io
+
+        csv_path = os.path.join(self.tmpdir, "s.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;alice\n")
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            bulk_post._run()
+
+        self.assertIn("Detected ';' as the CSV delimiter", stderr.getvalue())
+
+    def test_no_info_message_for_comma_delimiter(self):
+        import contextlib
+        import io
+
+        csv_path = self._write_csv("c.csv", [{"id": "1"}])
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", return_value=self._mock_resp(200, b"ok")),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(stderr),
+        ):
+            bulk_post._run()
+
+        self.assertNotIn("as the CSV delimiter", stderr.getvalue())
 
 
 # ---------------------------------------------------------------------------

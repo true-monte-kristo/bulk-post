@@ -11,21 +11,46 @@ from .http import _mask_headers
 from .terminal import _BottomBar, _out
 
 
+def detect_delimiter(path: str) -> str:
+    """Best-effort detect the CSV delimiter, considering ``, ; \\t |``.
+
+    Returns the detected single-character delimiter, or ``","`` when the file is
+    empty, unreadable, or the delimiter cannot be determined — so comma files
+    behave exactly as before.
+    """
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            sample = f.read(65536)
+    except OSError:
+        return ","
+    if not sample.strip():
+        return ","
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        return ","
+    return dialect.delimiter
+
+
 def count_csv_rows(path: str) -> int:
     """Count data rows (excluding the header); returns 0 if the file can't be read."""
     try:
+        delimiter = detect_delimiter(path)
         with open(path, newline="", encoding="utf-8") as f:
-            return sum(1 for _ in csv.DictReader(f))
+            return sum(1 for _ in csv.DictReader(f, delimiter=delimiter))
     except OSError:
         return 0
 
 
 def _open_retry_writer(
-    retry_path: pathlib.Path, fieldnames: list
+    retry_path: pathlib.Path, fieldnames: list, delimiter: str = ","
 ) -> tuple[IO[str], Any]:
-    """Open the retry CSV and write its header. Returns (file, writer)."""
+    """Open the retry CSV and write its header. Returns (file, writer).
+
+    ``delimiter`` matches the input CSV so the retry file round-trips.
+    """
     f = open(retry_path, "w", newline="", encoding="utf-8")  # noqa: SIM115  # caller owns lifecycle
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=delimiter)
     writer.writeheader()
     return f, writer
 
