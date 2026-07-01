@@ -11,7 +11,12 @@ import pathlib
 import sys
 
 from .auth import resolve_auth_header
-from .csvio import _open_log_file, _open_retry_writer, _skip_rows
+from .csvio import (
+    _open_log_file,
+    _open_retry_writer,
+    _skip_rows,
+    detect_delimiter,
+)
 from .runner import _run_loop, _run_parallel
 from .templating import _validate_placeholders
 from .terminal import _HAS_TERMIOS, _BottomBar
@@ -212,11 +217,16 @@ def _run(argv: list[str] | None = None) -> int:
     )
     log_path = retry_path.with_suffix(".log")
 
+    delimiter = detect_delimiter(str(csv_path))
+    if delimiter != ",":
+        shown = "tab" if delimiter == "\t" else f"'{delimiter}'"
+        print(f"[INFO] Detected {shown} as the CSV delimiter.", file=sys.stderr)
+
     # Single pass: read header and count rows before starting the bar or prompting
     # for credentials, so validation errors are always visible in a clean terminal.
     try:
         with open(csv_path, newline="", encoding="utf-8") as f:
-            _r = csv.DictReader(f)
+            _r = csv.DictReader(f, delimiter=delimiter)
             fieldnames: list = list(_r.fieldnames or [])
             total_rows = sum(1 for _ in _r)
     except OSError as e:
@@ -287,9 +297,11 @@ def _run(argv: list[str] | None = None) -> int:
 
     try:
         with csv_file:
-            reader = csv.DictReader(csv_file)
+            reader = csv.DictReader(csv_file, delimiter=delimiter)
             _skip_rows(reader, offset, bar)
-            retry_file, retry_writer = _open_retry_writer(retry_path, retry_fieldnames)
+            retry_file, retry_writer = _open_retry_writer(
+                retry_path, retry_fieldnames, delimiter=delimiter
+            )
             log_file = _open_log_file(log_path)
             try:
                 if workflow_mode:

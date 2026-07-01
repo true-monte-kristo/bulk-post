@@ -1128,6 +1128,49 @@ class TestRun(unittest.TestCase):
             auth_headers[1], "Basic " + base64.b64encode(b"new:pass").decode()
         )
 
+    def test_semicolon_delimited_input(self):
+        csv_path = os.path.join(self.tmpdir, "s.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;alice\n2;bob\n")
+        urls = []
+
+        def capture(req, timeout=None):
+            urls.append(req.full_url)
+            return self._mock_resp(200, b"ok")
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", side_effect=capture),
+            patch("builtins.print"),
+        ):
+            bulk_post._run()
+
+        self.assertIn("http://t.com/1", urls)
+        self.assertIn("http://t.com/2", urls)
+
+    def test_semicolon_retry_file_roundtrips(self):
+        csv_path = os.path.join(self.tmpdir, "s.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("id;name\n1;alice\n")
+        retry_path = Path(csv_path).parent / "s_failed.csv"
+        err = urllib.error.HTTPError("http://t.com/1", 500, "Err", {}, BytesIO(b"boom"))
+
+        with (
+            patch("sys.argv", self._argv("http://t.com/{{id}}", csv_path)),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("urllib.request.urlopen", side_effect=err),
+            patch("builtins.print"),
+        ):
+            code = bulk_post.main()
+
+        self.assertEqual(code, 1)
+        self.assertTrue(retry_path.exists())
+        with open(retry_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f, delimiter=";"))
+        self.assertEqual(rows[0]["id"], "1")
+        self.assertEqual(rows[0]["name"], "alice")
+
 
 # ---------------------------------------------------------------------------
 # --parallel integration tests
